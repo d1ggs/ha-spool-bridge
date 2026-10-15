@@ -167,7 +167,10 @@ class CloudSync:
     async def _apply(self, action: Any, cloud_by_id: dict[int, dict]) -> bool:
         if isinstance(action, Create):
             known = set(cloud_by_id)
-            await self._cloud(self.client.create_spool, action.payload)
+            # The create endpoint rejects bodies without createType (HTTP 400,
+            # verified live); colorType/isSupport match what Studio sends.
+            body = {"createType": "manual", "colorType": 2, "isSupport": False, **action.payload}
+            await self._cloud(self.client.create_spool, body)
             fresh = [c for c in await self._cloud(self.client.get_spools)
                      if c["id"] not in known and c.get("filamentName") == action.payload["filamentName"]
                      and hex6(c.get("color")) == hex6(action.payload["color"])]

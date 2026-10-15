@@ -119,3 +119,13 @@ def test_unlinked_matching_cloud_entry_is_adopted():
     actions = plan([spool(1), spool(2)], [orphan], DEV)
     assert Link(1, 55) in actions
     assert any(isinstance(a, Create) and a.spool_id == 2 for a in actions)
+
+
+async def test_create_sends_fields_the_cloud_requires():
+    sync, client, _ = _sync([], [spool(1)])
+    client.get_spools.side_effect = [[], [cloud(77)]]
+    await sync.reconcile()
+    body = client.create_spool.call_args.args[0]
+    assert body["createType"] == "manual"
+    assert body["colorType"] == 2 and body["isSupport"] is False
+    assert body["filamentName"] == "PLA Matte"
