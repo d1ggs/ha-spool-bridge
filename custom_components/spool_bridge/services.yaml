@@ -1,0 +1,22 @@
+reconcile:
+  name: Reconcile
+  description: Mirror Spoolman into the Bambu cloud library now.
+assign:
+  name: Assign spool
+  description: Assign a Spoolman spool to a slot (ams:<unit>:<slot> or ext:<n>, 0-based).
+  fields:
+    spool_id:
+      required: true
+      selector: { number: { min: 1, max: 1000000, mode: box } }
+    slot:
+      required: true
+      example: "ams:1:0"
+      selector: { text: {} }
+unassign:
+  name: Unassign slot
+  description: Clear the spool assigned to a slot.
+  fields:
+    slot:
+      required: true
+      example: "ams:1:0"
+      selector: { text: {} }

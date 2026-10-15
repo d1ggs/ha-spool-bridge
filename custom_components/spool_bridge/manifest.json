@@ -1,0 +1,24 @@
+{
+  "domain": "spool_bridge",
+  "name": "Spool Bridge",
+  "after_dependencies": [
+    "bambu_lab",
+    "mobile_app",
+    "tag"
+  ],
+  "codeowners": [
+    "@d1ggs"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "http"
+  ],
+  "documentation": "https://github.com/d1ggs/ha-spool-bridge",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/d1ggs/ha-spool-bridge/issues",
+  "requirements": [
+    "curl_cffi>=0.13.0"
+  ],
+  "version": "0.1.0"
+}

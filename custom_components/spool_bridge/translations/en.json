@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {"title": "Spool Bridge", "data": {"spoolman_url": "Spoolman URL", "printer_serial": "Printer", "notify_service": "Phone (notify service)"}},
+      "bambu": {"title": "Bambu cloud account", "menu_options": {"import_token": "Reuse the Bambu Filaments login", "login": "Sign in"}},
+      "login": {"title": "Sign in to Bambu", "data": {"region": "Region", "email": "Email", "password": "Password"}},
+      "code": {"title": "Verification code", "description": "Enter the code Bambu sent to {email}.", "data": {"code": "Code"}},
+      "tfa": {"title": "Two-factor code", "data": {"code": "Code"}},
+      "migrate": {"title": "One-time migration", "description": "{plan}\n\nDeleting cloud spools cannot be undone.", "data": {"run_migration": "Run this migration now"}}
+    },
+    "error": {"spoolman": "Spoolman is not reachable at this URL.", "cloudflare": "Blocked by Bambu's bot protection, try again later.", "invalid_auth": "Wrong email or password.", "cannot_connect": "Cannot reach the Bambu cloud.", "code_incorrect": "Code rejected.", "migration_failed": "Migration failed; nothing was deleted if the import failed."},
+    "abort": {"already_configured": "This printer is already set up.", "cannot_connect": "Cannot reach the Bambu cloud.", "reauth_successful": "Signed in again."}
+  }
+}

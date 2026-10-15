@@ -1,0 +1,409 @@
+{
+ "hits": [
+  {
+   "id": 1000,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-15T18:14:07Z",
+   "endTime": "2026-10-15T18:52:13Z",
+   "weight": 10.65,
+   "amsDetailMapping": [
+    {
+     "ams": 5,
+     "sourceColor": "804040FF",
+     "targetColor": "8B0404FF",
+     "filamentId": "GFL99",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 10.46,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    },
+    {
+     "ams": 7,
+     "sourceColor": "00000000",
+     "targetColor": "00000000",
+     "filamentId": "GFS05",
+     "filamentType": "PLA-S",
+     "targetFilamentType": "",
+     "weight": 0.19,
+     "nozzleId": 0,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1001,
+   "deviceId": "FAKE00000000002",
+   "deviceModel": "A1 mini",
+   "status": 2,
+   "startTime": "2026-10-14T11:38:58Z",
+   "endTime": "2026-10-14T12:40:22Z",
+   "weight": 13.28,
+   "amsDetailMapping": [
+    {
+     "ams": 255,
+     "sourceColor": "000000FF",
+     "targetColor": "000000FF",
+     "filamentId": "GFA00",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 13.28,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1002,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-14T11:36:55Z",
+   "endTime": "2026-10-14T14:06:41Z",
+   "weight": 39.79,
+   "amsDetailMapping": [
+    {
+     "ams": 0,
+     "sourceColor": "804040FF",
+     "targetColor": "7C4B00FF",
+     "filamentId": "GFL99",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 30.98,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    },
+    {
+     "ams": 7,
+     "sourceColor": "00000000",
+     "targetColor": "00000000",
+     "filamentId": "GFS05",
+     "filamentType": "PLA-S",
+     "targetFilamentType": "",
+     "weight": 8.81,
+     "nozzleId": 0,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1003,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-13T22:05:06Z",
+   "endTime": "2026-10-14T01:38:17Z",
+   "weight": 66.65,
+   "amsDetailMapping": [
+    {
+     "ams": 4,
+     "sourceColor": "CFA0A0FF",
+     "targetColor": "AF7933FF",
+     "filamentId": "GFL99",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 63.14,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    },
+    {
+     "ams": 7,
+     "sourceColor": "00000000",
+     "targetColor": "00000000",
+     "filamentId": "GFS05",
+     "filamentType": "PLA-S",
+     "targetFilamentType": "",
+     "weight": 3.51,
+     "nozzleId": 0,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1004,
+   "deviceId": "FAKE00000000002",
+   "deviceModel": "A1 mini",
+   "status": 2,
+   "startTime": "2026-10-13T21:55:52Z",
+   "endTime": "2026-10-13T22:14:31Z",
+   "weight": 3.35,
+   "amsDetailMapping": [
+    {
+     "ams": 255,
+     "sourceColor": "000000FF",
+     "targetColor": "000000FF",
+     "filamentId": "",
+     "filamentType": "PLA",
+     "targetFilamentType": "PLA",
+     "weight": 3.35,
+     "nozzleId": 0,
+     "amsId": 255,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1005,
+   "deviceId": "FAKE00000000002",
+   "deviceModel": "A1 mini",
+   "status": 3,
+   "startTime": "2026-10-13T21:48:27Z",
+   "endTime": "2026-10-13T21:49:25Z",
+   "weight": 3.35,
+   "amsDetailMapping": [
+    {
+     "ams": 255,
+     "sourceColor": "000000FF",
+     "targetColor": "D5B6A4FF",
+     "filamentId": "",
+     "filamentType": "PLA",
+     "targetFilamentType": "PLA",
+     "weight": 3.35,
+     "nozzleId": 0,
+     "amsId": 255,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1006,
+   "deviceId": "FAKE00000000002",
+   "deviceModel": "A1 mini",
+   "status": 2,
+   "startTime": "2026-10-13T18:54:51Z",
+   "endTime": "2026-10-13T20:53:15Z",
+   "weight": 49.75,
+   "amsDetailMapping": [
+    {
+     "ams": 255,
+     "sourceColor": "CFA0A0FF",
+     "targetColor": "D5B6A4FF",
+     "filamentId": "GFL99",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 49.75,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1007,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-13T18:42:02Z",
+   "endTime": "2026-10-13T19:38:05Z",
+   "weight": 23.48,
+   "amsDetailMapping": [
+    {
+     "ams": 0,
+     "sourceColor": "9D0006FE",
+     "targetColor": "057748FF",
+     "filamentId": "",
+     "filamentType": "PLA",
+     "targetFilamentType": "PLA",
+     "weight": 23.48,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1008,
+   "deviceId": "FAKE00000000002",
+   "deviceModel": "A1 mini",
+   "status": 2,
+   "startTime": "2026-10-13T16:33:26Z",
+   "endTime": "2026-10-13T16:55:46Z",
+   "weight": 6.06,
+   "amsDetailMapping": [
+    {
+     "ams": 255,
+     "sourceColor": "FFFFFFFF",
+     "targetColor": "FFFFFFFF",
+     "filamentId": "GFL99",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 6.06,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1009,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-13T16:27:01Z",
+   "endTime": "2026-10-13T17:19:20Z",
+   "weight": 16.16,
+   "amsDetailMapping": [
+    {
+     "ams": 5,
+     "sourceColor": "00AE42FF",
+     "targetColor": "00AE42FF",
+     "filamentId": "",
+     "filamentType": "PLA",
+     "targetFilamentType": "PLA",
+     "weight": 16.16,
+     "nozzleId": 1,
+     "amsId": 1,
+     "slotId": 1
+    }
+   ]
+  },
+  {
+   "id": 1010,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 3,
+   "startTime": "2026-10-13T16:24:51Z",
+   "endTime": "2026-10-13T16:26:40Z",
+   "weight": 16.16,
+   "amsDetailMapping": [
+    {
+     "ams": 5,
+     "sourceColor": "00AE42FF",
+     "targetColor": "00AE42FF",
+     "filamentId": "",
+     "filamentType": "PLA",
+     "targetFilamentType": "PLA",
+     "weight": 16.16,
+     "nozzleId": 1,
+     "amsId": 1,
+     "slotId": 1
+    }
+   ]
+  },
+  {
+   "id": 1011,
+   "deviceId": "FAKE00000000002",
+   "deviceModel": "A1 mini",
+   "status": 3,
+   "startTime": "2026-10-13T12:31:47Z",
+   "endTime": "2026-10-13T12:36:24Z",
+   "weight": 11.86,
+   "amsDetailMapping": [
+    {
+     "ams": 255,
+     "sourceColor": "9D432CFF",
+     "targetColor": "AC95D5FF",
+     "filamentId": "",
+     "filamentType": "PLA",
+     "targetFilamentType": "PLA",
+     "weight": 11.86,
+     "nozzleId": 0,
+     "amsId": 255,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1012,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-13T11:19:27Z",
+   "endTime": "2026-10-13T11:50:33Z",
+   "weight": 2.61,
+   "amsDetailMapping": [
+    {
+     "ams": 6,
+     "sourceColor": "C12E1FFF",
+     "targetColor": "C12E1FFF",
+     "filamentId": "GFA00",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 1.19,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    },
+    {
+     "ams": 5,
+     "sourceColor": "00AE42FF",
+     "targetColor": "00AE42FF",
+     "filamentId": "GFA00",
+     "filamentType": "PLA",
+     "targetFilamentType": "",
+     "weight": 1.41,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    },
+    {
+     "ams": 7,
+     "sourceColor": "00000000",
+     "targetColor": "00000000",
+     "filamentId": "GFS05",
+     "filamentType": "PLA-S",
+     "targetFilamentType": "",
+     "weight": 0.01,
+     "nozzleId": 0,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  },
+  {
+   "id": 1013,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-12T14:14:43Z",
+   "endTime": "2026-10-12T22:29:33Z",
+   "weight": 126.04,
+   "amsDetailMapping": [
+    {
+     "ams": 3,
+     "sourceColor": "FFFFFFFF",
+     "targetColor": "FFFFFFFF",
+     "filamentId": "",
+     "filamentType": "PLA",
+     "targetFilamentType": "PLA",
+     "weight": 126.04,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 3
+    }
+   ]
+  },
+  {
+   "id": 1014,
+   "deviceId": "FAKE00000000001",
+   "deviceModel": "X2D",
+   "status": 2,
+   "startTime": "2026-10-12T12:56:19Z",
+   "endTime": "2026-10-12T13:29:05Z",
+   "weight": 9.49,
+   "amsDetailMapping": [
+    {
+     "ams": 2,
+     "sourceColor": "000000FF",
+     "targetColor": "000000FF",
+     "filamentId": "GFG00",
+     "filamentType": "PETG",
+     "targetFilamentType": "",
+     "weight": 9.49,
+     "nozzleId": 1,
+     "amsId": 0,
+     "slotId": 0
+    }
+   ]
+  }
+ ]
+}
