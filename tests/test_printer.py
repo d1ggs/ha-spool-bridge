@@ -74,3 +74,9 @@ async def test_set_filament_calls_bambulab(hass):
     await p.set_filament(tray, filament_id="GFL03", color_hex="006633", material="PLA", nozzle_temp=215)
     assert calls[0].data == {"entity_id": tray.entity_id, "tray_info_idx": "GFL03", "tray_color": "006633FF",
                              "tray_type": "PLA", "nozzle_temp_min": 205, "nozzle_temp_max": 225}
+
+
+async def test_name_uses_no_deprecated_registry_api(hass, caplog):
+    setup_printer(hass)
+    assert Printer(hass, SERIAL).name() == "X2D"
+    assert "deprecated" not in caplog.text

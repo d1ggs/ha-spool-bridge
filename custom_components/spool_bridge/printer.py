@@ -81,7 +81,8 @@ class Printer:
         return self._entity(f"{self.serial}_print_progress")
 
     def name(self) -> str:
-        device = dr.async_get(self.hass).async_get_device(identifiers={(BAMBULAB_DOMAIN, self.serial)})
+        devices = dr.async_get(self.hass).async_get_devices(identifiers={(BAMBULAB_DOMAIN, self.serial)})
+        device = devices[0] if devices else None
         return (device and (device.name_by_user or device.model)) or "Printer"
 
     def trays(self) -> list[TrayInfo]:

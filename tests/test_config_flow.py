@@ -38,3 +38,12 @@ async def test_full_flow_with_token_import_and_migration(hass):
     assert r["data"]["token"] == "tok" and r["data"]["printer_serial"] == SERIAL
     imp.assert_awaited_once()
     cloud.delete_spools.assert_called_once_with([2])
+
+
+async def test_printer_list_uses_no_deprecated_registry_api(hass, caplog):
+    from custom_components.spool_bridge.config_flow import SpoolBridgeConfigFlow
+    setup_printer(hass)
+    flow = SpoolBridgeConfigFlow()
+    flow.hass = hass
+    assert flow._printers() == [SERIAL]
+    assert "deprecated" not in caplog.text

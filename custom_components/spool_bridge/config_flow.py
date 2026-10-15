@@ -38,7 +38,7 @@ class SpoolBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._cloud: list[dict] = []
 
     def _printers(self) -> list[str]:
-        devices = dr.async_get(self.hass).devices.values()
+        devices = list(dr.async_get(self.hass).devices)
         return sorted(ident[1] for d in devices if d.via_device_id is None
                       for ident in d.identifiers if ident[0] == BAMBULAB_DOMAIN)
 
