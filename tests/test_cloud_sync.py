@@ -67,6 +67,14 @@ def test_no_unbind_when_slot_rebound():
     assert Unbind(SlotRef("ams", 0, 3)) not in actions
 
 
+def test_no_unbind_for_rfid_spool():
+    # The printer owns RFID spool positions: the cloud rejects manual unbinds
+    # (code 4, even on an empty slot) and clears them once another spool loads.
+    actions = plan([spool(1, cloud=10, rfid="AB" * 16)],
+                   [cloud(10, rfid="AB" * 16, in_printer=True, ams=0, slot="1")], DEV)
+    assert actions == []
+
+
 def test_external_slot_not_bound():
     assert plan([spool(1, cloud=10, slot="ext:0")], [cloud(10)], DEV) == []
 

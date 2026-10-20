@@ -113,6 +113,11 @@ def plan(spools: list[dict], cloud: list[dict], dev_id: str) -> list[Any]:
                 actions.append(Bind(c["id"], slot, str(c.get("RFID") or "")))
     taken = set(wanted_slots.values())
     for cid in linked:
+        if by_id[cid].get("RFID"):
+            # The printer owns RFID spool positions: the cloud rejects manual
+            # unbinds (code 4, even on an empty slot) and clears the stale slot
+            # itself once another spool is loaded there.
+            continue
         current = _cloud_slot(by_id[cid], dev_id)
         if current is not None and cid not in wanted_slots and current not in taken:
             actions.append(Unbind(current))
