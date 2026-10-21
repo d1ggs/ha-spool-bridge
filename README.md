@@ -29,7 +29,7 @@ Scope: one printer (built and tested on an X2D with two AMS 2 Pro). External spo
 
 ## Labels
 
-- **QR:** in Spoolman, Settings → General → Base URL = `https://www.home-assistant.io/tag`, then print labels with "Use HTTP URL". Scanning one yields the tag `spool/show/<id>`.
+- **QR:** in Spoolman, Settings → General → Base URL = `https://www.home-assistant.io/tag`. Then set the label's **QR code link** to **URL**: in the label designer (Labels → select the QR code element), or in the Print Labels dialog, depending on the Spoolman build. The preview should read `https://www.home-assistant.io/tag/spool/show/{id}`; the default `WEB+SPOOLMAN:S-{id}` only works with Spoolman's own scanner. Scan with the iPhone Camera app; the link opens the Home Assistant app, which reports the tag `spool/show/<id>`.
 - **NFC:** in the Home Assistant app, write a tag with the id `spool-<id>`.
 
 Each Spoolman filament can carry a `bambu_filament_id` (e.g. `GFL03`, or a Studio user preset id). Without it a generic profile for the material is used.
