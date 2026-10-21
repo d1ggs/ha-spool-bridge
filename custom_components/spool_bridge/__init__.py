@@ -61,8 +61,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     bridge = Bridge(hass, entry, spoolman, cloud, Printer(hass, entry.data[CONF_PRINTER_SERIAL]))
     entry.runtime_data = bridge
     await bridge.async_start()
+    entry.async_on_unload(entry.add_update_listener(_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """New name rules apply right away instead of at the next 15-minute sync."""
+    await entry.runtime_data.request_reconcile(now=True)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

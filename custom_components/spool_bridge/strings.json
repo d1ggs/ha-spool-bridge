@@ -10,5 +10,11 @@
     },
     "error": {"spoolman": "Spoolman is not reachable at this URL.", "cloudflare": "Blocked by Bambu's bot protection, try again later.", "invalid_auth": "Wrong email or password.", "cannot_connect": "Cannot reach the Bambu cloud.", "code_incorrect": "Code rejected.", "migration_failed": "Migration failed; nothing was deleted if the import failed."},
     "abort": {"already_configured": "This printer is already set up.", "cannot_connect": "Cannot reach the Bambu cloud.", "reauth_successful": "Signed in again."}
+  },
+  "options": {
+    "step": {
+      "init": {"title": "Spool Bridge options", "description": "Filament name rules shorten the names of filaments imported from the Spoolman database (e.g. for labels). One rule per line: `pattern => replacement`, or just `pattern` to delete what it matches. Patterns are Python regular expressions; spaces are collapsed afterwards. Leave empty to keep names as imported.\n\nExample:\n`™|®`\n`\\s*\\(Formerly[^)]*\\)`", "data": {"filament_name_rules": "Filament name rules"}}
+    },
+    "error": {"invalid_rules": "Invalid rule ({error})."}
   }
 }

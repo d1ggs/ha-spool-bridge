@@ -33,6 +33,22 @@ Scope: one printer (built and tested on an X2D with two AMS 2 Pro). External spo
 
 Each Spoolman filament can carry a `bambu_filament_id` (e.g. `GFL03`, or a Studio user preset id). Without it a generic profile for the material is used.
 
+### Shorter filament names (optional)
+
+Names imported from the Spoolman database can be long enough to overflow a label, e.g. `Panchroma™ Matte (Formerly PolyTerra™) Earth Brown`. Under Settings → Devices & services → Spool Bridge → Configure you can add rewrite rules, one per line:
+
+```
+™|®
+\s*\(Formerly[^)]*\)
+```
+
+Each line is `pattern => replacement`, or just `pattern` to delete what it matches (Python regular expressions; spaces are collapsed afterwards). The example turns that name into `Panchroma Matte Earth Brown`.
+
+- Off by default; leave the field empty to keep names as imported.
+- Only filaments imported from the database are renamed. Filaments you or the bridge created are left alone.
+- Rules run at every sync: right after saving them, after any spool change, and every 15 minutes. The new names also reach the Bambu cloud library.
+- A rule that would change its own output again (e.g. `Matte => Matte Finish`) is skipped, so names can't grow on every sync.
+
 ## Services
 
 | Service | Fields |

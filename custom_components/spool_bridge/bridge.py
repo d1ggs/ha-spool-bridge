@@ -18,12 +18,13 @@ from .assignment import Ambiguous, Assign, Expired, LoadWindow
 from .bambu_cloud import AuthExpired, BambuCloudError
 from .cloud_sync import CloudSync
 from .const import (
-    ACTION_PREFIX, BUSY_STATES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES, EXTRA_RFID, EXTRA_SLOT,
+    ACTION_PREFIX, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES, EXTRA_RFID, EXTRA_SLOT,
     IDLE_STATES, JOB_FETCH_ATTEMPTS, JOB_FETCH_DELAY_S, LEDGER_RETRY_INTERVAL, LOAD_WINDOW_S,
     RECONCILE_DEBOUNCE_S, RECONCILE_INTERVAL, SET_FILAMENT_ATTEMPTS, SET_FILAMENT_RETRY_DELAY_S, SETTLE_S,
     SIGNAL_STATE, STUCK_AFTER_S,
 )
 from .model import SlotRef, extra_get, hex6, spool_filament_id, tag_to_spool_id
+from .naming import RuleError, parse_rules, renamed
 from .printer import Printer, parse_tray_state
 from .spoolman import SpoolmanError
 from .usage import Ledger, apply_entry, parse_ts, plan_entries, select_job
@@ -297,6 +298,7 @@ class Bridge:
             return
         async with self._reconcile_lock:
             try:
+                await self.rename_filaments()
                 done = await self.sync.reconcile()
             except AuthExpired:
                 self._auth_expired()
@@ -316,6 +318,26 @@ class Bridge:
                 self._first_failure, self._stuck_notified = None, False
                 self.state["last_sync"] = dt_util.utcnow()
                 async_dispatcher_send(self.hass, SIGNAL_STATE)
+
+    async def rename_filaments(self) -> None:
+        """Apply the optional name rules to filaments imported from the external database.
+
+        Runs before the cloud sync so the new names reach the cloud in the same pass.
+        Filaments the bridge created itself are skipped: it finds them again by name.
+        """
+        try:
+            rules = parse_rules(self.entry.options.get(CONF_NAME_RULES, ""))
+        except RuleError as err:
+            self._error(f"Filament name rules: {err}")
+            return
+        if not rules:
+            return
+        for filament in await self.spoolman.get_filaments():
+            if not filament.get("external_id"):
+                continue
+            if new := renamed(filament.get("name") or "", rules):
+                await self.spoolman.patch_filament(filament["id"], {"name": new})
+                _LOGGER.info("Renamed filament %s: %r -> %r", filament["id"], filament.get("name"), new)
 
     def _auth_expired(self) -> None:
         if not self._cloud_paused:

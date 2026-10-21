@@ -84,6 +84,15 @@ class SpoolmanClient:
             body["location"] = location
         return await self.patch_spool(spool_id, body)
 
+    async def get_filaments(self) -> list[dict]:
+        return list(await self._req("GET", "/filament") or [])
+
+    async def patch_filament(self, filament_id: int, body: dict) -> dict:
+        result = await self._req("PATCH", f"/filament/{int(filament_id)}", json=body)
+        if result is None:
+            raise SpoolmanError(f"Filament {filament_id} not found")
+        return result
+
     async def use_weight(self, spool_id: int, grams: float) -> dict:
         result = await self._req("PUT", f"/spool/{int(spool_id)}/use", json={"use_weight": float(grams)})
         if result is None:

@@ -203,3 +203,39 @@ async def test_set_filament_failure_retried_and_reported(hass, bridge):
     assert len(attempts) == 3
     assert "profile" in bridge.notes[-1]["message"].lower()
     assert "✓" not in bridge.notes[-1]["message"]
+
+
+DB_FILAMENTS = [
+    {"id": 12, "name": "Panchroma™ Matte (Formerly PolyTerra™) Earth Brown", "external_id": "polymaker_pla_x"},
+    {"id": 3, "name": "PLA Basic™", "external_id": None},  # bridge-made: matched by name, never renamed
+    {"id": 14, "name": "PLA-Basic Silver", "external_id": "esun_pla_x"},
+]
+
+
+def with_filaments(bridge):
+    bridge.spoolman.get_filaments = AsyncMock(return_value=DB_FILAMENTS)
+    bridge.spoolman.patch_filament = AsyncMock()
+
+
+async def test_rename_filaments_only_touches_database_imports(hass, bridge):
+    with_filaments(bridge)
+    hass.config_entries.async_update_entry(
+        bridge.entry, options={"filament_name_rules": "™\n\\s*\\(Formerly[^)]*\\)"})
+    await bridge.rename_filaments()
+    bridge.spoolman.patch_filament.assert_awaited_once_with(12, {"name": "Panchroma Matte Earth Brown"})
+
+
+async def test_rename_filaments_off_without_rules(hass, bridge):
+    with_filaments(bridge)
+    await bridge.rename_filaments()
+    bridge.spoolman.get_filaments.assert_not_awaited()
+
+
+async def test_reconcile_renames_before_cloud_sync(hass, bridge):
+    with_filaments(bridge)
+    hass.config_entries.async_update_entry(bridge.entry, options={"filament_name_rules": "™"})
+    order = []
+    bridge.spoolman.patch_filament.side_effect = lambda *a: order.append("rename")
+    bridge.sync.reconcile = AsyncMock(side_effect=lambda: order.append("sync") or [])
+    await bridge._reconcile()
+    assert order == ["rename", "sync"]

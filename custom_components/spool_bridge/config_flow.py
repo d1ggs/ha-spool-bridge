@@ -1,4 +1,6 @@
-"""Config flow: Spoolman + printer + phone, Bambu login (or token import), migration."""
+"""Config flow: Spoolman + printer + phone, Bambu login (or token import), migration.
+
+Options flow: the optional filament name rules."""
 
 from __future__ import annotations
 
@@ -6,20 +8,24 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
+from homeassistant.helpers.selector import (
+    SelectSelector, SelectSelectorConfig, SelectSelectorMode, TextSelector, TextSelectorConfig,
+)
 
 from .bambu_cloud import (
     AuthFailed, BambuCloudClient, BambuCloudError, CloudflareBlocked, CodeIncorrect,
     EmailCodeRequired, TfaRequired,
 )
 from .const import (
-    BAMBU_FILAMENTS_DOMAIN, BAMBULAB_DOMAIN, CONF_EMAIL, CONF_NOTIFY_SERVICE, CONF_PRINTER_SERIAL,
+    BAMBU_FILAMENTS_DOMAIN, BAMBULAB_DOMAIN, CONF_EMAIL, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, CONF_PRINTER_SERIAL,
     CONF_REGION, CONF_SPOOLMAN_URL, CONF_TOKEN, DEFAULT_SPOOLMAN_URL, DOMAIN,
 )
 from .migration import describe, import_spools, plan_migration
+from .naming import RuleError, parse_rules
 from .printer import Printer
 from .spoolman import SpoolmanClient, SpoolmanError
 
@@ -36,6 +42,11 @@ class SpoolBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._client: BambuCloudClient | None = None
         self._tfa_key = ""
         self._cloud: list[dict] = []
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> SpoolBridgeOptionsFlow:
+        return SpoolBridgeOptionsFlow()
 
     def _printers(self) -> list[str]:
         devices = list(dr.async_get(self.hass).devices)
@@ -170,3 +181,23 @@ class SpoolBridgeConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         self._data = dict(entry_data)
         return await self.async_step_login()
+
+
+class SpoolBridgeOptionsFlow(OptionsFlow):
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        detail = ""
+        if user_input is not None:
+            try:
+                parse_rules(user_input.get(CONF_NAME_RULES, ""))
+            except RuleError as err:
+                errors[CONF_NAME_RULES], detail = "invalid_rules", str(err)
+            else:
+                return self.async_create_entry(data=user_input)
+        current = (user_input or self.config_entry.options).get(CONF_NAME_RULES, "")
+        schema = vol.Schema({
+            vol.Optional(CONF_NAME_RULES, description={"suggested_value": current}):
+                TextSelector(TextSelectorConfig(multiline=True)),
+        })
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors,
+                                    description_placeholders={"error": detail})

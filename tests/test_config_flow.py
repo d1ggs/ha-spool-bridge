@@ -47,3 +47,16 @@ async def test_printer_list_uses_no_deprecated_registry_api(hass, caplog):
     flow.hass = hass
     assert flow._printers() == [SERIAL]
     assert "deprecated" not in caplog.text
+
+
+async def test_options_flow_validates_and_saves_name_rules(hass):
+    entry = MockConfigEntry(domain="spool_bridge", data={"printer_serial": SERIAL})
+    entry.add_to_hass(hass)
+    r = await hass.config_entries.options.async_init(entry.entry_id)
+    assert r["type"] is FlowResultType.FORM and r["step_id"] == "init"
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {"filament_name_rules": "(unclosed"})
+    assert r["errors"] == {"filament_name_rules": "invalid_rules"}
+    assert "line 1" in r["description_placeholders"]["error"]
+    r = await hass.config_entries.options.async_configure(r["flow_id"], {"filament_name_rules": "™"})
+    assert r["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {"filament_name_rules": "™"}

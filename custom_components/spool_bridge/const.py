@@ -12,6 +12,7 @@ CONF_NOTIFY_SERVICE = "notify_service"
 CONF_REGION = "region"
 CONF_EMAIL = "email"
 CONF_TOKEN = "token"
+CONF_NAME_RULES = "filament_name_rules"
 
 DEFAULT_SPOOLMAN_URL = "http://3b88f413-spoolman:8000"
 BAMBULAB_DOMAIN = "bambu_lab"
