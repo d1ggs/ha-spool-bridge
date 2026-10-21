@@ -35,6 +35,7 @@ JOB_MATCH_TOLERANCE_S = 300
 LEDGER_TTL_DAYS = 90
 STUCK_AFTER_S = 3600
 USED_WEIGHT_TOLERANCE_G = 0.5
+RUNOUT_PAUSE_GRACE_S = 60  # a pause this soon after a tray ran dry means no auto-refill happened
 
 TASK_FINISHED = 2
 TASK_FAILED = 3

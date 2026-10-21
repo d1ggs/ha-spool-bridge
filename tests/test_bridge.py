@@ -239,3 +239,88 @@ async def test_reconcile_renames_before_cloud_sync(hass, bridge):
     bridge.sync.reconcile = AsyncMock(side_effect=lambda: order.append("sync") or [])
     await bridge._reconcile()
     assert order == ["rename", "sync"]
+
+
+# --- AMS auto-refill: a tray runs dry mid-print and the printer continues from a same-filament tray
+
+async def _runout_print(hass, bridge, extra_spools=()):
+    """Print started with spool 7 in ams:1:1 and spool 42 (same filament) in ams:1:2."""
+    bridge.spools[42]["extra"] = {"bambu_slot": '"ams:1:2"'}
+    for sid, slot in extra_spools:
+        bridge.spools[sid] = sm_spool(sid, slot=slot)
+    await bridge.async_start()
+    await _start_print(hass, bridge, bridge.printer.status_entity)
+    bridge.ledger.progress = 60
+
+
+async def _set_tray(hass, bridge, key, empty, active=False):
+    hass.states.async_set(tray_entity(bridge, key), "Generic PLA", {
+        "empty": empty, "active": active, "tray_uuid": "0" * 32, "type": "PLA"})
+    await hass.async_block_till_done()
+
+
+async def test_runout_recorded_with_matching_backup(hass, bridge):
+    await _runout_print(hass, bridge)
+    await _set_tray(hass, bridge, "ams:1:1", empty=True)
+    run = bridge.ledger.snapshot["runouts"]["ams:1:1"]
+    assert (run["progress"], run["backup"], run["candidates"]) == (60, "ams:1:2", ["ams:1:2"])
+
+
+async def test_runout_backup_follows_active_tray(hass, bridge):
+    await _runout_print(hass, bridge, extra_spools=[(43, "ams:1:3")])
+    await _set_tray(hass, bridge, "ams:1:1", empty=True)
+    assert bridge.ledger.snapshot["runouts"]["ams:1:1"]["backup"] == "ams:1:2"
+    await _set_tray(hass, bridge, "ams:1:3", empty=False, active=True)
+    assert bridge.ledger.snapshot["runouts"]["ams:1:1"]["backup"] == "ams:1:3"
+    await _set_tray(hass, bridge, "ams:1:0", empty=False, active=True)  # unrelated colour change
+    assert bridge.ledger.snapshot["runouts"]["ams:1:1"]["backup"] == "ams:1:3"
+
+
+async def test_runout_without_same_filament_is_not_recorded(hass, bridge):
+    bridge.spools[7]["filament"] = {**bridge.spools[7]["filament"], "color_hex": "FF0000"}
+    await _runout_print(hass, bridge)
+    await _set_tray(hass, bridge, "ams:1:1", empty=True)
+    assert bridge.ledger.snapshot["runouts"] == {}
+
+
+async def test_no_runout_when_idle_paused_or_unassigned(hass, bridge):
+    await _runout_print(hass, bridge)
+    await _set_tray(hass, bridge, "ams:1:0", empty=True)  # not in the print-start assignment
+    assert bridge.ledger.snapshot["runouts"] == {}
+    status = bridge.printer.status_entity
+    hass.states.async_set(status, "idle")
+    await hass.async_block_till_done()
+    await _set_tray(hass, bridge, "ams:1:1", empty=True)
+    assert bridge.ledger.snapshot["runouts"] == {}
+
+
+async def test_pause_right_after_runout_discards_it(hass, bridge):
+    await _runout_print(hass, bridge)
+    await _set_tray(hass, bridge, "ams:1:1", empty=True)
+    hass.states.async_set(bridge.printer.status_entity, "pause")  # a real runout pause: no auto-refill happened
+    await hass.async_block_till_done()
+    assert bridge.ledger.snapshot["runouts"] == {}
+
+
+async def test_runout_job_is_split_and_reported(hass, bridge):
+    await _runout_print(hass, bridge)
+    bridge.spoolman.patch_spool = AsyncMock()
+    await _set_tray(hass, bridge, "ams:1:1", empty=True)
+    bridge.cloud.get_tasks.return_value = [_job_for(bridge)]
+    hass.states.async_set(bridge.printer.status_entity, "finish")
+    await hass.async_block_till_done()
+    await bridge.process_finished_job()
+    assert [c.args for c in bridge.spoolman.use_weight.await_args_list] == [(7, 12.0), (42, 8.0)]
+    bridge.spoolman.patch_spool.assert_awaited_once_with(7, {"used_weight": 1000.0})
+    notes = [n["message"] for n in bridge.notes if "estimate" in n["message"]]
+    assert len(notes) == 1 and "12" in notes[0] and "8" in notes[0] and "weigh" in notes[0].lower()
+    await bridge.process_finished_job()  # already booked: nothing more
+    assert bridge.spoolman.use_weight.await_count == 2
+
+
+async def test_chained_runout_keeps_first_backup(hass, bridge):
+    await _runout_print(hass, bridge, extra_spools=[(43, "ams:1:3")])
+    await _set_tray(hass, bridge, "ams:1:1", empty=True)  # backup guessed: ams:1:2
+    await _set_tray(hass, bridge, "ams:1:2", empty=True)  # it runs dry too
+    await _set_tray(hass, bridge, "ams:1:3", empty=False, active=True)
+    assert bridge.ledger.snapshot["runouts"]["ams:1:1"]["backup"] == "ams:1:2"

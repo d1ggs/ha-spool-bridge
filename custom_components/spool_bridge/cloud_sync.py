@@ -43,7 +43,6 @@ class Link:
 class Bind:
     cloud_id: int
     slot: SlotRef
-    rfid: str
 
 
 @dataclass(frozen=True)
@@ -109,14 +108,14 @@ def plan(spools: list[dict], cloud: list[dict], dev_id: str) -> list[Any]:
         slot = SlotRef.parse(extra_get(spool, EXTRA_SLOT))
         if slot is not None and slot.kind == "ams":
             wanted_slots[c["id"]] = slot
-            if _cloud_slot(c, dev_id) != slot:
-                actions.append(Bind(c["id"], slot, str(c.get("RFID") or "")))
+            # The printer owns RFID spool positions: the cloud rejects manual
+            # binds (code 3) and unbinds (code 4, even on an empty slot), and
+            # updates them itself once a print uses the spool or another loads.
+            if _cloud_slot(c, dev_id) != slot and not c.get("RFID"):
+                actions.append(Bind(c["id"], slot))
     taken = set(wanted_slots.values())
     for cid in linked:
         if by_id[cid].get("RFID"):
-            # The printer owns RFID spool positions: the cloud rejects manual
-            # unbinds (code 4, even on an empty slot) and clears the stale slot
-            # itself once another spool is loaded there.
             continue
         current = _cloud_slot(by_id[cid], dev_id)
         if current is not None and cid not in wanted_slots and current not in taken:
@@ -214,7 +213,7 @@ class CloudSync:
                 if state is None or not state.empty:
                     return False  # the cloud only accepts unbinding an empty slot
             mapping = {"amsId": action.slot.unit, "amsSn": tray.ams_serial, "amsType": tray.ams_type,
-                       "rfid": action.rfid if isinstance(action, Bind) else "",
+                       "rfid": "",
                        "slotId": str(action.slot.slot),
                        "spoolId": action.cloud_id if isinstance(action, Bind) else 0}
             results = await self._cloud(self.client.slot_mappings_sync, self.dev_id, [mapping])

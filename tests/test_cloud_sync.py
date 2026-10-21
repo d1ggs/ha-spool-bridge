@@ -57,7 +57,7 @@ def test_missing_cloud_spool_is_recreated():
 def test_bind_and_unbind():
     actions = plan([spool(1, cloud=10, slot="ams:1:0"), spool(2, cloud=20)],
                    [cloud(10), cloud(20, in_printer=True, ams=0, slot="3")], DEV)
-    assert Bind(10, SlotRef("ams", 1, 0), "") in actions
+    assert Bind(10, SlotRef("ams", 1, 0)) in actions
     assert Unbind(SlotRef("ams", 0, 3)) in actions
 
 
@@ -72,6 +72,21 @@ def test_no_unbind_for_rfid_spool():
     # (code 4, even on an empty slot) and clears them once another spool loads.
     actions = plan([spool(1, cloud=10, rfid="AB" * 16)],
                    [cloud(10, rfid="AB" * 16, in_printer=True, ams=0, slot="1")], DEV)
+    assert actions == []
+
+
+def test_no_bind_for_rfid_spool():
+    # Likewise for binds (code 3): the cloud places a known RFID spool once a
+    # print uses it from that slot.
+    actions = plan([spool(1, cloud=10, rfid="AB" * 16, slot="ams:0:2")], [cloud(10, rfid="AB" * 16)], DEV)
+    assert actions == []
+
+
+def test_rfid_spool_slot_still_blocks_unbind():
+    # A manual spool left bound where an RFID spool now sits is not unbound
+    # (the RFID spool's arrival replaces it in the cloud).
+    actions = plan([spool(1, cloud=10, rfid="AB" * 16, slot="ams:0:2"), spool(2, cloud=20)],
+                   [cloud(10, rfid="AB" * 16), cloud(20, in_printer=True, ams=0, slot="2")], DEV)
     assert actions == []
 
 

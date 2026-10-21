@@ -36,6 +36,7 @@ class TrayState:
     name: str
     tray_weight: int
     remain: int  # percent, -1 unknown
+    active: bool = False  # the tray currently feeding the nozzle
 
 
 def _int(value: Any, default: int) -> int:
@@ -61,6 +62,7 @@ def parse_tray_state(state: Any) -> TrayState | None:
         name=str(attrs.get("name") or ""),
         tray_weight=_int(attrs.get("tray_weight"), 0),
         remain=_int(attrs.get("remain"), -1),
+        active=bool(attrs.get("active")),
     )
 
 

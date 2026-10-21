@@ -20,14 +20,14 @@ from .cloud_sync import CloudSync
 from .const import (
     ACTION_PREFIX, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES, EXTRA_RFID, EXTRA_SLOT,
     IDLE_STATES, JOB_FETCH_ATTEMPTS, JOB_FETCH_DELAY_S, LEDGER_RETRY_INTERVAL, LOAD_WINDOW_S,
-    RECONCILE_DEBOUNCE_S, RECONCILE_INTERVAL, SET_FILAMENT_ATTEMPTS, SET_FILAMENT_RETRY_DELAY_S, SETTLE_S,
-    SIGNAL_STATE, STUCK_AFTER_S,
+    RECONCILE_DEBOUNCE_S, RECONCILE_INTERVAL, RUNOUT_PAUSE_GRACE_S, SET_FILAMENT_ATTEMPTS, SET_FILAMENT_RETRY_DELAY_S,
+    SETTLE_S, SIGNAL_STATE, STUCK_AFTER_S,
 )
-from .model import SlotRef, extra_get, hex6, spool_filament_id, tag_to_spool_id
+from .model import SlotRef, extra_get, hex6, slot_from_flat, spool_filament_id, tag_to_spool_id
 from .naming import RuleError, parse_rules, renamed
 from .printer import Printer, parse_tray_state
 from .spoolman import SpoolmanError
-from .usage import Ledger, apply_entry, parse_ts, plan_entries, select_job
+from .usage import Entry, Ledger, apply_entry, parse_ts, plan_entries, runout_candidates, select_job
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -184,15 +184,64 @@ class Bridge:
         old, new = parse_tray_state(old_state), parse_tray_state(new_state)
         # External holders report "empty" whenever they are not the active feed
         # (ha-bambulab), so their transitions say nothing about loading.
-        if tray is None or tray.slot.kind != "ams" or old is None or new is None or old.empty == new.empty:
+        if tray is None or tray.slot.kind != "ams" or old is None or new is None:
+            return
+        if new.active and not old.active:
+            await self._confirm_backup(tray.slot)
+        if old.empty == new.empty:
             return
         if new.empty:
+            await self._record_runout(tray.slot)
             await self.unassign(tray.slot)
             return
         if new.rfid:
             await self.sync_rfid_trays()
             return
         self.window.tray_loaded(tray.slot, time.time())
+
+    # ------------------------------------------------------------ auto-refill
+
+    def _runouts(self) -> dict[str, dict] | None:
+        """Runouts of the print in progress (None when no print is being tracked)."""
+        snapshot = self.ledger.snapshot
+        if snapshot is None or snapshot.get("booked") or self.printer.status() != "running":
+            return None
+        return snapshot.setdefault("runouts", {})
+
+    async def _record_runout(self, slot: SlotRef) -> None:
+        """A tray of the running print went empty. If the print carries on, the printer switched to a
+        same-filament tray (AMS auto-refill) and the cloud job still reports all grams on this slot."""
+        runouts = self._runouts()
+        progress = self.ledger.progress if self.ledger.progress is not None else self.printer.progress()
+        if runouts is None or progress is None or slot.key not in self.ledger.snapshot["assignment"]:
+            return
+        assignment = self.ledger.snapshot["assignment"]
+        try:
+            spools = {s["id"]: s for s in await self.spoolman.get_spools(allow_archived=False)}
+        except SpoolmanError as err:
+            self._error(f"Runout on {slot.key}: Spoolman unreachable, usage will not be split ({err})")
+            return
+        # only AMS trays can be auto-refilled from; external holders report "empty" when not feeding
+        states = {t.slot.key: st for t in self.printer.trays()
+                  if t.slot.kind == "ams" and (st := self.printer.tray_state(t)) is not None}
+        candidates = runout_candidates(slot.key, assignment, spools, {k for k, st in states.items() if not st.empty})
+        if not candidates:
+            return  # nothing to split with: book as before
+        active = next((k for k in candidates if states[k].active), None)
+        runouts[slot.key] = {"progress": progress, "backup": active or candidates[0], "candidates": candidates,
+                             "confirmed": active is not None, "ts": time.time()}
+        await self._save()
+
+    async def _confirm_backup(self, slot: SlotRef) -> None:
+        """The printer now feeds from `slot`: that is the backup of any runout it could have refilled."""
+        runouts = self._runouts() or {}
+        # a runout already confirmed, or whose backup ran dry too (chained), is left alone
+        hit = [r for r in runouts.values() if slot.key in r["candidates"] and not r["confirmed"]
+               and r["backup"] not in runouts and slot.key not in runouts]
+        for run in hit:
+            run["backup"], run["confirmed"] = slot.key, True
+        if hit:
+            await self._save()
 
     async def assign(self, spool_id: int, slot: SlotRef) -> None:
         try:
@@ -365,9 +414,15 @@ class Bridge:
     async def on_status_change(self, old: str | None, new: str) -> None:
         if new in BUSY_STATES and old in IDLE_STATES:
             assignment = await self._current_assignment()
-            self.ledger.snapshot = {"start_ts": time.time(), "assignment": assignment, "booked": False}
+            self.ledger.snapshot = {"start_ts": time.time(), "assignment": assignment, "runouts": {}, "booked": False}
             self.ledger.progress = None
             await self._save()
+        elif new == "pause" and (runouts := (self.ledger.snapshot or {}).get("runouts")):
+            now = time.time()
+            if recent := [k for k, r in runouts.items() if now - r["ts"] < RUNOUT_PAUSE_GRACE_S]:
+                for key in recent:
+                    del runouts[key]
+                await self._save()
         elif (new in END_STATES and self.ledger.snapshot is not None
               and not self.ledger.snapshot.get("booked") and not self._fetching):
             self._fetching = True
@@ -408,7 +463,8 @@ class Bridge:
         if job is None:
             return False
         async with self._ledger_lock:
-            entries = plan_entries(job, snapshot["assignment"], self.ledger.progress, time.time())
+            entries = plan_entries(job, snapshot["assignment"], self.ledger.progress, time.time(),
+                                   snapshot.get("runouts"))
             if not self.ledger.add_job(job, entries, time.time()):
                 entries = []
             snapshot["booked"] = True
@@ -417,7 +473,20 @@ class Bridge:
         for entry in entries:
             if entry.state == "skipped":
                 await self.notify(f"Print usage {entry.grams} g from tray {entry.ams} not booked: {entry.note}")
+        await self._notify_refills(entries)
         return True
+
+    async def _notify_refills(self, entries: list[Entry]) -> None:
+        """One message per auto-refill split: the grams are an estimate, so ask for a weigh-in."""
+        name = self.printer.name()
+        for backup in (e for e in entries if e.share == "backup"):
+            first = next(e for e in entries if (e.job_id, e.ams) == (backup.job_id, backup.ams) and not e.share)
+            slot = slot_from_flat(backup.ams)
+            await self.notify(
+                f"Filament ran out on {slot.label(name)} ({first.note}); the printer carried on with spool "
+                f"{backup.spool_id}. Split: {first.grams} g to spool {first.spool_id} (now empty) and "
+                f"{backup.grams} g to spool {backup.spool_id}. The split is an estimate from the print "
+                f"progress: weigh spool {backup.spool_id} to correct it.")
 
     async def catch_up_jobs(self) -> None:
         """Book X2D jobs that ended while HA was down (current assignment, flagged)."""
@@ -439,18 +508,21 @@ class Bridge:
         if snapshot is not None and not snapshot.get("booked"):
             snap_job = select_job(missed, self.dev_id, snapshot["start_ts"])
         assignment = await self._current_assignment()
-        guessed = 0
+        guessed, refills = 0, []
         async with self._ledger_lock:
             for job in missed:
                 if job is snap_job:
-                    entries = plan_entries(job, snapshot["assignment"], self.ledger.progress, time.time())
+                    entries = plan_entries(job, snapshot["assignment"], self.ledger.progress, time.time(),
+                                           snapshot.get("runouts"))
                     snapshot["booked"] = True
                 else:
                     entries = plan_entries(job, assignment, None, time.time())
                     guessed += 1
-                self.ledger.add_job(job, entries, time.time())
+                if self.ledger.add_job(job, entries, time.time()) and job is snap_job:
+                    refills = entries
             await self._save()
         await self.apply_pending()
+        await self._notify_refills(refills)
         if guessed:
             await self.notify(f"Booked {guessed} print(s) that finished while Home Assistant was down "
                               "using the current slot assignment; check those spools.")

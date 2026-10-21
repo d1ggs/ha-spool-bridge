@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from .const import JOB_MATCH_TOLERANCE_S, LEDGER_TTL_DAYS, TASK_FAILED, TASK_FINISHED, USED_WEIGHT_TOLERANCE_G
-from .model import slot_from_flat
+from .model import hex6, slot_from_flat
 
 
 def parse_ts(value: Any) -> float | None:
@@ -30,10 +30,12 @@ class Entry:
     used_before: float | None = None
     note: str = ""
     created: float = 0.0
+    share: str = ""  # "backup": the part of a runout slot's grams drawn from the auto-refill spool
+    zero: bool = False  # the spool ran out for real: leave it empty after booking
 
     @property
     def key(self) -> str:
-        return f"{self.job_id}:{self.ams}"
+        return f"{self.job_id}:{self.ams}" + (f":{self.share}" if self.share else "")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,7 +55,25 @@ def select_job(tasks: list[dict], dev_id: str, start_ts: float | None) -> dict |
     return min(scored, key=lambda s: s[0])[1] if scored else None
 
 
-def plan_entries(job: dict, assignment: dict[str, int], progress: int | None, now: float) -> list[Entry]:
+def _filament_key(spool: dict) -> tuple[str, str]:
+    fil = spool.get("filament") or {}
+    return str(fil.get("material") or "").upper(), hex6(fil.get("color_hex"))
+
+
+def runout_candidates(slot_key: str, assignment: dict[str, int], spools: dict[int, dict], loaded: set[str]) -> list[str]:
+    """Loaded slots holding the same material + colour as the spool that ran out: possible auto-refill feeds."""
+    own = spools.get(assignment.get(slot_key))
+    if own is None:
+        return []
+    want = _filament_key(own)
+    return sorted(k for k, sid in assignment.items()
+                  if k != slot_key and k in loaded and sid in spools and _filament_key(spools[sid]) == want)
+
+
+def plan_entries(job: dict, assignment: dict[str, int], progress: int | None, now: float,
+                 runouts: dict[str, dict] | None = None) -> list[Entry]:
+    """`runouts` (slot key -> {progress, backup}) splits a slot's grams between the spool that ran out
+    (up to the print progress at the runout) and its auto-refill backup (the rest)."""
     if job.get("status") == TASK_FINISHED:
         factor: float | None = 1.0
     else:
@@ -76,7 +96,18 @@ def plan_entries(job: dict, assignment: dict[str, int], progress: int | None, no
         elif spool_id is None:
             entries.append(Entry(job["id"], ams, None, grams, "skipped", note="no spool assigned to slot", created=now))
         else:
-            entries.append(Entry(job["id"], ams, spool_id, round(grams * factor, 2), "pending", created=now))
+            total = round(grams * factor, 2)
+            run = (runouts or {}).get(slot.key) or {}
+            backup_id = assignment.get(run.get("backup"))
+            if backup_id is None or backup_id == spool_id or run.get("progress") is None:
+                entries.append(Entry(job["id"], ams, spool_id, total, "pending", created=now))
+                continue
+            first = min(total, round(grams * max(0, min(100, run["progress"])) / 100, 2))
+            entries.append(Entry(job["id"], ams, spool_id, first, "pending", note=f"ran out at {run['progress']}%",
+                                 created=now, zero=True))
+            if (rest := round(total - first, 2)) > 0:
+                entries.append(Entry(job["id"], ams, backup_id, rest, "pending", note=f"auto-refill from {slot.key}",
+                                     created=now, share="backup"))
     return entries
 
 
@@ -129,12 +160,15 @@ async def apply_entry(entry: Entry, spoolman: Any, save: Callable[[], Awaitable[
         await save()
         return
     used = float(spool.get("used_weight") or 0)
-    if entry.used_before is not None and used >= entry.used_before + entry.grams - USED_WEIGHT_TOLERANCE_G:
-        entry.state = "applied"
+    landed = entry.used_before is not None and used >= entry.used_before + entry.grams - USED_WEIGHT_TOLERANCE_G
+    if not landed:
+        entry.used_before = used
         await save()
-        return
-    entry.used_before = used
-    await save()
-    await spoolman.use_weight(entry.spool_id, entry.grams)
+        await spoolman.use_weight(entry.spool_id, entry.grams)
+        used += entry.grams
+    # A spool that ran out is physically empty whatever the estimate said (setting the total is retry-safe).
+    initial = float(spool.get("initial_weight") or (spool.get("filament") or {}).get("weight") or 0)
+    if entry.zero and used < initial:
+        await spoolman.patch_spool(entry.spool_id, {"used_weight": initial})
     entry.state = "applied"
     await save()
