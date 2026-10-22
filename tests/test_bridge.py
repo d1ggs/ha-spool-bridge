@@ -22,7 +22,8 @@ def sm_spool(sid, slot=None, archived=False, rfid=None):
 
 
 @pytest.fixture
-async def bridge(hass):
+async def bridge(hass, monkeypatch):
+    monkeypatch.setattr("custom_components.spool_bridge.printer.SET_FILAMENT_CONFIRM_S", 0)
     setup_printer(hass)
     entry = MockConfigEntry(domain="spool_bridge", data={
         "spoolman_url": "http://sm", "printer_serial": SERIAL, "notify_service": "mobile_app_test",
@@ -45,6 +46,9 @@ async def bridge(hass):
 
     async def set_filament(call):
         filament_calls.append(call.data)
+        old = hass.states.get(call.data["entity_id"])  # the printer echoes the profile it took
+        hass.states.async_set(call.data["entity_id"], "Generic PLA",
+                              {**(old.attributes if old else {}), "filament_id": call.data["tray_info_idx"]})
 
     hass.services.async_register("notify", "mobile_app_test", notify)
     hass.services.async_register("bambu_lab", "set_filament", set_filament)
@@ -202,6 +206,19 @@ async def test_set_filament_failure_retried_and_reported(hass, bridge):
     await bridge.assign(42, SlotRef("ams", 0, 2))
     assert len(attempts) == 3
     assert "profile" in bridge.notes[-1]["message"].lower()
+    assert "✓" not in bridge.notes[-1]["message"]
+
+
+async def test_set_filament_ignored_by_printer_is_reported(hass, bridge):
+    # ha-bambulab returns quietly when the printer blocks control commands
+    # (seen live 2026-10-22: "requires mqtt encryption", then a timeout), so
+    # the tray keeps its old profile and only reading it back shows that.
+    await bridge.async_start()
+    ent = tray_entity(bridge, "ams:0:2")
+    await load(hass, ent, False)
+    hass.services.async_register("bambu_lab", "set_filament", lambda call: None)
+    await bridge.assign(42, SlotRef("ams", 0, 2))
+    assert "profile could not be set" in bridge.notes[-1]["message"]
     assert "✓" not in bridge.notes[-1]["message"]
 
 

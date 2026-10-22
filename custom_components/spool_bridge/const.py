@@ -45,6 +45,8 @@ END_STATES = {"finish", "failed"}
 IDLE_STATES = {"idle", "finish", "failed"}
 SET_FILAMENT_ATTEMPTS = 3
 SET_FILAMENT_RETRY_DELAY_S = 2
+# How long the tray may take to report the profile it was given.
+SET_FILAMENT_CONFIRM_S = 10
 
 AMS_TYPE_BY_MODEL = {"AMS": 1, "AMS Lite": 2, "AMS 2 Pro": 3, "AMS HT": 4}
 

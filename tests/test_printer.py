@@ -67,6 +67,7 @@ async def test_set_filament_calls_bambulab(hass):
 
     async def handler(call):
         calls.append(call)
+        hass.states.async_set(call.data["entity_id"], "Generic PLA", {"filament_id": call.data["tray_info_idx"]})
 
     hass.services.async_register("bambu_lab", "set_filament", handler)
     p = Printer(hass, SERIAL)

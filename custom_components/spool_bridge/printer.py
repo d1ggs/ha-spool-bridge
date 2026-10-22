@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import re
+import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import AMS_TYPE_BY_MODEL, BAMBULAB_DOMAIN
+from .const import AMS_TYPE_BY_MODEL, BAMBULAB_DOMAIN, SET_FILAMENT_CONFIRM_S
 from .model import SlotRef, tray_color
 
 _AMS_TRAY_RE = re.compile(r"^[^_]+_(?P<serial>[^_]+)_AMS_(?P<ams>[^_]+)_tray_(?P<n>\d+)$")
 _EXT_RE = re.compile(r"^[^_]+_(?P<serial>[^_]+)_ExternalSpool(?P<n>\d*)_external_spool$")
 _AMS_INDEX_RE = re.compile(r"_AMS_(?P<n>\d+)$")
 _HEX32 = re.compile(r"^[0-9A-F]{32}$")
+
+
+class FilamentNotApplied(Exception):
+    """The tray did not take the profile, although the service call returned."""
 
 
 @dataclass(frozen=True)
@@ -141,3 +147,11 @@ class Printer:
             },
             blocking=True,
         )
+        # ha-bambulab returns without an error when the printer blocks control
+        # commands, so only the tray reporting the new profile proves it applied.
+        deadline = time.monotonic() + SET_FILAMENT_CONFIRM_S
+        while (state := self.tray_state(tray)) is None or state.filament_id != filament_id:
+            if time.monotonic() >= deadline:
+                reported = state.filament_id if state and state.filament_id else "nothing"
+                raise FilamentNotApplied(f"the printer still reports {reported}")
+            await asyncio.sleep(0.5)

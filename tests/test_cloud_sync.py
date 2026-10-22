@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from custom_components.spool_bridge.cloud_sync import (
-    Bind, CloudSync, Create, Delete, Link, Unbind, Update, plan,
+    Bind, CloudSync, Create, Delete, Link, Update, plan,
 )
 from custom_components.spool_bridge.model import SlotRef
 from custom_components.spool_bridge.printer import TrayInfo
@@ -54,17 +54,17 @@ def test_missing_cloud_spool_is_recreated():
     assert isinstance(actions[0], Create)
 
 
-def test_bind_and_unbind():
+def test_bind():
+    actions = plan([spool(1, cloud=10, slot="ams:1:0")], [cloud(10)], DEV)
+    assert actions == [Bind(10, SlotRef("ams", 1, 0))]
+
+
+def test_no_unbind_for_manual_spool_left_in_slot():
+    # The cloud rejects unbinds with code 4 even on an empty slot (seen live
+    # 2026-10-22 for manual spools); it replaces the spool once another is bound there.
     actions = plan([spool(1, cloud=10, slot="ams:1:0"), spool(2, cloud=20)],
                    [cloud(10), cloud(20, in_printer=True, ams=0, slot="3")], DEV)
-    assert Bind(10, SlotRef("ams", 1, 0)) in actions
-    assert Unbind(SlotRef("ams", 0, 3)) in actions
-
-
-def test_no_unbind_when_slot_rebound():
-    actions = plan([spool(1, cloud=10, slot="ams:0:3"), spool(2, cloud=20)],
-                   [cloud(10), cloud(20, in_printer=True, ams=0, slot="3")], DEV)
-    assert Unbind(SlotRef("ams", 0, 3)) not in actions
+    assert actions == [Bind(10, SlotRef("ams", 1, 0))]
 
 
 def test_no_unbind_for_rfid_spool():

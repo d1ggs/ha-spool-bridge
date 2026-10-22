@@ -45,11 +45,6 @@ class Bind:
     slot: SlotRef
 
 
-@dataclass(frozen=True)
-class Unbind:
-    slot: SlotRef
-
-
 def _cloud_slot(c: dict, dev_id: str) -> SlotRef | None:
     if not c.get("inPrinter") or c.get("devId") != dev_id or c.get("amsId") is None:
         return None
@@ -76,8 +71,6 @@ def plan(spools: list[dict], cloud: list[dict], dev_id: str) -> list[Any]:
     by_id = {c["id"]: c for c in cloud if isinstance(c.get("id"), int)}
     by_rfid = {str(c.get("RFID")).upper(): c for c in cloud if c.get("RFID")}
     actions: list[Any] = []
-    wanted_slots: dict[int, SlotRef] = {}
-    linked: set[int] = set()
     # Cloud ids already claimed by some Spoolman spool; anything else that looks
     # like one of ours (e.g. a create whose id was never saved) is adopted
     # instead of creating a duplicate.
@@ -102,24 +95,15 @@ def plan(spools: list[dict], cloud: list[dict], dev_id: str) -> list[Any]:
             if not rfid:  # RFID spools are registered by the AMS path, never created as manual
                 actions.append(Create(sid, cloud_payload(spool)))
             continue
-        linked.add(c["id"])
         if diff := cloud_field_diff(cloud_payload(spool), c):
             actions.append(Update(sid, c["id"], diff))
         slot = SlotRef.parse(extra_get(spool, EXTRA_SLOT))
-        if slot is not None and slot.kind == "ams":
-            wanted_slots[c["id"]] = slot
-            # The printer owns RFID spool positions: the cloud rejects manual
-            # binds (code 3) and unbinds (code 4, even on an empty slot), and
-            # updates them itself once a print uses the spool or another loads.
-            if _cloud_slot(c, dev_id) != slot and not c.get("RFID"):
-                actions.append(Bind(c["id"], slot))
-    taken = set(wanted_slots.values())
-    for cid in linked:
-        if by_id[cid].get("RFID"):
-            continue
-        current = _cloud_slot(by_id[cid], dev_id)
-        if current is not None and cid not in wanted_slots and current not in taken:
-            actions.append(Unbind(current))
+        # The printer owns RFID spool positions: the cloud rejects manual binds
+        # for them (code 3) and places them once a print uses the spool. Spools
+        # are never unbound: the cloud rejects that for every spool (code 4,
+        # even on an empty slot) and replaces a spool once another is bound there.
+        if slot is not None and slot.kind == "ams" and _cloud_slot(c, dev_id) != slot and not c.get("RFID"):
+            actions.append(Bind(c["id"], slot))
     return actions
 
 
@@ -203,23 +187,19 @@ class CloudSync:
         if isinstance(action, Link):
             await self.spoolman.set_spool_extra(action.spool_id, {EXTRA_CLOUD_ID: str(action.cloud_id)})
             return True
-        if isinstance(action, (Bind, Unbind)):
+        if isinstance(action, Bind):
             tray = self.printer.tray_for(action.slot)
             if tray is None or not tray.ams_serial:
-                self.errors.append(f"{type(action).__name__}: no AMS tray for {action.slot.key}")
+                self.errors.append(f"Bind: no AMS tray for {action.slot.key}")
                 return False
-            if isinstance(action, Unbind):
-                state = self.printer.tray_state(tray)
-                if state is None or not state.empty:
-                    return False  # the cloud only accepts unbinding an empty slot
             mapping = {"amsId": action.slot.unit, "amsSn": tray.ams_serial, "amsType": tray.ams_type,
                        "rfid": "",
                        "slotId": str(action.slot.slot),
-                       "spoolId": action.cloud_id if isinstance(action, Bind) else 0}
+                       "spoolId": action.cloud_id}
             results = await self._cloud(self.client.slot_mappings_sync, self.dev_id, [mapping])
             codes = [r.get("code") for r in results]
             if codes != [0]:
-                self.errors.append(f"{type(action).__name__} {action.slot.key}: cloud code {codes[0] if codes else 'none'}")
+                self.errors.append(f"Bind {action.slot.key}: cloud code {codes[0] if codes else 'none'}")
                 return False
             return True
         return False
