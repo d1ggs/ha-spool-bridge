@@ -262,7 +262,10 @@ class Bridge:
         fil = spool.get("filament") or {}
         tray = self.printer.tray_for(slot)
         profile_error: Exception | None = None
-        if tray is not None and not extra_get(spool, EXTRA_RFID):
+        # In cloud mode the firmware blocks set_filament, and nothing the bridge
+        # can do changes the on-device tray label; the cloud slot binding (done
+        # by the reconcile below) is what Studio reads, so skip the futile write.
+        if tray is not None and not extra_get(spool, EXTRA_RFID) and not self.printer.control_blocked():
             for attempt in range(SET_FILAMENT_ATTEMPTS):
                 try:
                     await self.printer.set_filament(

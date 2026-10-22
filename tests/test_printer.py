@@ -29,8 +29,11 @@ def setup_printer(hass: HomeAssistant) -> None:
                                   suggested_object_id="status")
     pr = ents.async_get_or_create("sensor", "bambu_lab", f"{SERIAL}_print_progress", device_id=printer.id,
                                   suggested_object_id="progress")
+    enc = ents.async_get_or_create("binary_sensor", "bambu_lab", f"{SERIAL}_mqtt_encryption",
+                                   device_id=printer.id, suggested_object_id="mqtt_encryption")
     hass.states.async_set(st.entity_id, "running")
     hass.states.async_set(pr.entity_id, "37")
+    hass.states.async_set(enc.entity_id, "off")
 
 
 async def test_trays_and_status(hass):
@@ -45,6 +48,20 @@ async def test_trays_and_status(hass):
     assert p.tray_by_entity(t.entity_id) == t
     assert p.status() == "running" and p.progress() == 37
     assert p.tray_state(t).rfid is None
+
+
+def test_control_blocked_tracks_encryption_sensor(hass):
+    setup_printer(hass)
+    p = Printer(hass, SERIAL)
+    assert p.control_blocked() is False
+    hass.states.async_set("binary_sensor.mqtt_encryption", "on")
+    assert p.control_blocked() is True
+
+
+def test_control_not_blocked_when_sensor_missing(hass):
+    setup_printer(hass)
+    er.async_get(hass).async_remove("binary_sensor.mqtt_encryption")
+    assert Printer(hass, SERIAL).control_blocked() is False
 
 
 def test_parse_tray_state():

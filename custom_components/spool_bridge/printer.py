@@ -124,6 +124,14 @@ class Printer:
     def tray_state(self, tray: TrayInfo) -> TrayState | None:
         return parse_tray_state(self.hass.states.get(tray.entity_id))
 
+    def control_blocked(self) -> bool:
+        """True when the firmware blocks control commands (cloud mode, MQTT signing
+        required). set_filament and other writes are then rejected or dropped."""
+        entity = er.async_get(self.hass).async_get_entity_id(
+            "binary_sensor", BAMBULAB_DOMAIN, f"{self.serial}_mqtt_encryption")
+        state = self.hass.states.get(entity) if entity else None
+        return state is not None and state.state == "on"
+
     def status(self) -> str | None:
         state = self.hass.states.get(self.status_entity) if self.status_entity else None
         return state.state if state else None

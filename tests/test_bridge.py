@@ -209,6 +209,17 @@ async def test_set_filament_failure_retried_and_reported(hass, bridge):
     assert "✓" not in bridge.notes[-1]["message"]
 
 
+async def test_assign_skips_set_filament_when_control_blocked(hass, bridge):
+    # Cloud-mode firmware blocks set_filament; the cloud slot binding carries the
+    # profile instead, so the bridge must not try, and must still report success.
+    await bridge.async_start()
+    hass.states.async_set("binary_sensor.mqtt_encryption", "on")
+    await bridge.assign(42, SlotRef("ams", 0, 2))
+    assert bridge.filament_calls == []
+    assert "✓" in bridge.notes[-1]["message"]
+    assert bridge.state["last_error"] is None
+
+
 async def test_set_filament_ignored_by_printer_is_reported(hass, bridge):
     # ha-bambulab returns quietly when the printer blocks control commands
     # (seen live 2026-10-22: "requires mqtt encryption", then a timeout), so
