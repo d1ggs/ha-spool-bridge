@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from custom_components.spool_bridge.usage import (
-    Entry, Ledger, apply_entry, parse_ts, plan_entries, runout_candidates, select_job,
+    Entry, Ledger, apply_entry, parse_ts, plan_entries, runout_candidates,
 )
 
 TASKS = json.loads((Path(__file__).parent / "fixtures" / "cloud_tasks.json").read_text())["hits"]
@@ -21,13 +21,6 @@ def job(status=2, mapping=None, jid=1, start="2026-10-15T18:14:07Z", end="2026-1
 def test_parse_ts():
     assert parse_ts("1970-01-01T00:01:00Z") == 60
     assert parse_ts("bad") is None
-
-
-def test_select_job_matches_start_time():
-    t = select_job(TASKS, DEV, parse_ts(TASKS[0]["startTime"]) + 30)
-    assert t["id"] == TASKS[0]["id"]
-    assert select_job(TASKS, DEV, parse_ts(TASKS[0]["startTime"]) + 3600) is None
-    assert select_job(TASKS, "OTHER", None) is None
 
 
 def test_plan_finished_job():

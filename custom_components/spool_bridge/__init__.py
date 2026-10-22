@@ -1,4 +1,4 @@
-"""Spool Bridge: Spoolman <-> Bambu X2D trays <-> Bambu cloud filament library."""
+"""Spool Bridge: Spoolman <-> Bambu printer trays (via ha-bambulab) <-> Bambuddy."""
 
 from __future__ import annotations
 
@@ -11,12 +11,11 @@ from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .bambu_cloud import BambuCloudClient
 from .bambuddy import BambuddyClient
 from .bridge import Bridge
 from .const import (
-    CONF_BAMBUDDY_KEY, CONF_BAMBUDDY_URL, CONF_PRINTER_SERIAL, CONF_REGION, CONF_SPOOLMAN_URL, CONF_TOKEN,
-    DEFAULT_BAMBUDDY_URL, DOMAIN, SPOOLMAN_PROXY_HOST, SPOOLMAN_PROXY_PORT,
+    CONF_BAMBUDDY_KEY, CONF_BAMBUDDY_URL, CONF_PRINTER_SERIAL, CONF_SPOOLMAN_URL, DEFAULT_BAMBUDDY_URL, DOMAIN,
+    SPOOLMAN_PROXY_HOST, SPOOLMAN_PROXY_PORT,
 )
 from .model import SlotRef
 from .printer import Printer
@@ -56,6 +55,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """v2 dropped the Bambu cloud: forget the account and token v1 stored."""
+    if entry.version == 1:
+        data = {k: v for k, v in entry.data.items() if k not in ("region", "email", "token")}
+        hass.config_entries.async_update_entry(entry, data=data, version=2)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
     spoolman = SpoolmanClient(session, entry.data[CONF_SPOOLMAN_URL])
@@ -64,13 +71,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await spoolman.ensure_extra_fields(BAMBUDDY_FIELDS if bambuddy_key else ())
     except SpoolmanError as err:
         raise ConfigEntryNotReady(str(err)) from err
-    cloud = BambuCloudClient(entry.data[CONF_REGION], entry.data[CONF_TOKEN])
     bambuddy = proxy = None
     if bambuddy_key:
         bambuddy = BambuddyClient(session, entry.options.get(CONF_BAMBUDDY_URL) or DEFAULT_BAMBUDDY_URL, bambuddy_key)
         proxy = SpoolmanProxy(session, entry.data[CONF_SPOOLMAN_URL], SPOOLMAN_PROXY_HOST, SPOOLMAN_PROXY_PORT,
                               lambda spool_id, grams: entry.runtime_data.on_bambuddy_usage(spool_id, grams))
-    bridge = Bridge(hass, entry, spoolman, cloud, Printer(hass, entry.data[CONF_PRINTER_SERIAL]),
+    bridge = Bridge(hass, entry, spoolman, Printer(hass, entry.data[CONF_PRINTER_SERIAL]),
                     bambuddy=bambuddy, proxy=proxy)
     entry.runtime_data = bridge
     await bridge.async_start()

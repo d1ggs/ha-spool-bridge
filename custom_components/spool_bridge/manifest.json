@@ -15,10 +15,8 @@
   ],
   "documentation": "https://github.com/d1ggs/ha-spool-bridge",
   "integration_type": "service",
-  "iot_class": "cloud_polling",
+  "iot_class": "local_push",
   "issue_tracker": "https://github.com/d1ggs/ha-spool-bridge/issues",
-  "requirements": [
-    "curl_cffi>=0.13.0"
-  ],
-  "version": "0.5.0"
+  "requirements": [],
+  "version": "0.6.0"
 }

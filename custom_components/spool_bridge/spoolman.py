@@ -9,7 +9,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import EXTRA_CLOUD_ID, EXTRA_FILAMENT_ID, EXTRA_RFID, EXTRA_SLICER_FILAMENT, EXTRA_SLOT, EXTRA_TAG
+from .const import EXTRA_FILAMENT_ID, EXTRA_RFID, EXTRA_SLICER_FILAMENT, EXTRA_SLOT, EXTRA_TAG
 from .model import extra_value, hex6
 
 _LOGGER = logging.getLogger(__name__)
@@ -17,7 +17,6 @@ _LOGGER = logging.getLogger(__name__)
 KEEP = object()
 
 EXTRA_FIELDS = (
-    ("spool", EXTRA_CLOUD_ID, "Bambu cloud id"),
     ("spool", EXTRA_RFID, "Bambu RFID"),
     ("spool", EXTRA_SLOT, "Bambu slot"),
     ("filament", EXTRA_FILAMENT_ID, "Bambu filament profile id"),

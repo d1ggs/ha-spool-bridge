@@ -28,8 +28,7 @@ async def bridge(hass, monkeypatch):
     monkeypatch.setattr("custom_components.spool_bridge.bridge.JOB_FETCH_ATTEMPTS", 2)
     setup_printer(hass)
     entry = MockConfigEntry(domain="spool_bridge", data={
-        "spoolman_url": "http://sm", "printer_serial": SERIAL, "notify_service": "mobile_app_test",
-        "region": "global", "email": "x@example.com", "token": "t"})
+        "spoolman_url": "http://sm", "printer_serial": SERIAL, "notify_service": "mobile_app_test"})
     entry.add_to_hass(hass)
     spools = {42: sm_spool(42), 7: sm_spool(7, slot="ams:1:1")}
     sm = MagicMock()
@@ -38,9 +37,6 @@ async def bridge(hass, monkeypatch):
     sm.set_spool_extra = AsyncMock()
     sm.use_weight = AsyncMock()
     sm.listen = AsyncMock()
-    cloud = MagicMock()
-    cloud.get_tasks.return_value = []
-    cloud.get_spools.return_value = []
     notes, filament_calls = [], []
 
     async def notify(call):
@@ -54,7 +50,7 @@ async def bridge(hass, monkeypatch):
 
     hass.services.async_register("notify", "mobile_app_test", notify)
     hass.services.async_register("bambu_lab", "set_filament", set_filament)
-    b = Bridge(hass, entry, sm, cloud, Printer(hass, SERIAL))
+    b = Bridge(hass, entry, sm, Printer(hass, SERIAL))
     b.request_reconcile = AsyncMock()
     b.notes, b.filament_calls, b.spools = notes, filament_calls, spools
     yield b
@@ -222,8 +218,8 @@ async def test_set_filament_failure_retried_and_reported(hass, bridge):
 
 
 async def test_assign_skips_set_filament_when_control_blocked(hass, bridge):
-    # Cloud-mode firmware blocks set_filament; the cloud slot binding carries the
-    # profile instead, so the bridge must not try, and must still report success.
+    # Without Developer mode the firmware refuses set_filament: the bridge must not
+    # try, and must still report the assignment.
     await bridge.async_start()
     hass.states.async_set("binary_sensor.developer_lan_mode", "off")
     await bridge.assign(42, SlotRef("ams", 0, 2))
@@ -231,8 +227,7 @@ async def test_assign_skips_set_filament_when_control_blocked(hass, bridge):
     assert bridge.filament_calls == []
     assert "✓" in msg
     assert bridge.state["last_error"] is None
-    # The on-device tray can't be set in cloud mode, so screen-started prints
-    # need a manual pick; the notification names exactly what to select.
+    # The tray has to be set by hand; the notification names exactly what to select.
     assert "screen" in msg.lower()
     assert "PolyTerra PLA" in msg  # the Spoolman filament name
     assert "GFL99" in msg  # the Bambu profile id to pick on the printer
@@ -277,14 +272,12 @@ async def test_rename_filaments_off_without_rules(hass, bridge):
     bridge.spoolman.get_filaments.assert_not_awaited()
 
 
-async def test_reconcile_renames_before_cloud_sync(hass, bridge):
+async def test_reconcile_applies_name_rules(hass, bridge):
     with_filaments(bridge)
     hass.config_entries.async_update_entry(bridge.entry, options={"filament_name_rules": "™"})
-    order = []
-    bridge.spoolman.patch_filament.side_effect = lambda *a: order.append("rename")
-    bridge.sync.reconcile = AsyncMock(side_effect=lambda: order.append("sync") or [])
     await bridge._reconcile()
-    assert order == ["rename", "sync"]
+    bridge.spoolman.patch_filament.assert_awaited_once_with(
+        12, {"name": "Panchroma Matte (Formerly PolyTerra) Earth Brown"})  # filament 3 is bridge-made
 
 
 # --- AMS auto-refill: a tray runs dry mid-print and the printer continues from a same-filament tray
@@ -428,13 +421,10 @@ async def test_interval_reconcile_heals_rfid_slots(hass, bridge):
     bridge.sync_rfid_trays.assert_awaited_once()
 
 
-async def test_rfid_slot_assigned_even_when_cloud_fails(hass, bridge):
-    # LAN-only: a Bambu cloud failure must not stop Spoolman slot assignment.
-    from custom_components.spool_bridge.bambu_cloud import BambuCloudError
+async def test_rfid_slots_assigned_for_every_tray(hass, bridge):
     other = "1370EEF9084F4DFE934999BB300E663D"
     bridge.spools[5] = sm_spool(5, rfid=RFID)
     bridge.spools[6] = sm_spool(6, rfid=other)
-    bridge.cloud.get_spools.side_effect = BambuCloudError("offline")
     bridge.assign = AsyncMock()
     await tray(hass, tray_entity(bridge, "ams:0:3"), "Bambu PLA Basic", False, uuid=RFID)
     await tray(hass, tray_entity(bridge, "ams:1:3"), "Bambu Support", False, uuid=other)

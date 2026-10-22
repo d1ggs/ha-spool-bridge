@@ -1,16 +1,15 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 import custom_components.spool_bridge as integration
 from tests.test_printer import SERIAL
 
-DATA = {"spoolman_url": "http://sm:8000", "printer_serial": SERIAL, "notify_service": "mobile_app_x",
-        "region": "global", "email": "x@example.com", "token": "t"}
+DATA = {"spoolman_url": "http://sm:8000", "printer_serial": SERIAL, "notify_service": "mobile_app_x"}
 
 
 async def setup(hass, options):
-    entry = MockConfigEntry(domain="spool_bridge", data=DATA, options=options)
+    entry = MockConfigEntry(domain="spool_bridge", version=2, data=DATA, options=options)
     entry.add_to_hass(hass)
     with patch.object(integration, "Bridge") as bridge_cls, \
             patch.object(integration.SpoolmanClient, "ensure_extra_fields", AsyncMock()) as fields, \

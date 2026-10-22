@@ -49,7 +49,7 @@ class SlotRef:
 
     @property
     def flat_index(self) -> int:
-        """Bambu's flat tray index as used in cloud print jobs."""
+        """Bambu's flat tray index (AMS unit * 4 + slot; 254/255 for the external holders)."""
         if self.kind == "ams":
             return self.unit * 4 + self.slot
         return 254 + self.unit
@@ -158,50 +158,3 @@ def spool_filament_id(spool: dict) -> str:
     filament = spool.get("filament") or {}
     return (preset_filament_id(extra_get(spool, "bambu_slicer_filament"))
             or extra_get(filament, "bambu_filament_id") or default_filament_id(filament.get("material")))
-
-
-def cloud_payload(spool: dict) -> dict:
-    """Bambu cloud library fields for a Spoolman spool (no id)."""
-    filament = spool.get("filament") or {}
-    vendor = (filament.get("vendor") or {}).get("name") or "Generic"
-    material = filament.get("material") or "PLA"
-    total = spool.get("initial_weight") or filament.get("weight") or 1000
-    remaining = spool.get("remaining_weight")
-    if remaining is None:
-        remaining = total
-    color = hex6(filament.get("color_hex")) or "FFFFFF"
-    return {
-        "filamentVendor": vendor,
-        "filamentType": material,
-        "filamentName": filament.get("name") or material,
-        "filamentId": spool_filament_id(spool),
-        "color": f"#{color}",
-        "netWeight": max(0, int(round(float(remaining)))),
-        "totalNetWeight": max(1, int(round(float(total)))),
-    }
-
-
-COMPARED_FIELDS = (
-    "filamentVendor", "filamentType", "filamentName", "filamentId",
-    "color", "netWeight", "totalNetWeight",
-)
-
-
-def cloud_field_diff(wanted: dict, cloud: dict) -> dict:
-    """Fields of `wanted` that differ from the cloud spool."""
-    diff: dict = {}
-    for key in COMPARED_FIELDS:
-        have, want = cloud.get(key), wanted[key]
-        if key == "color":
-            if hex6(have) != hex6(want):
-                diff[key] = want
-        elif key in ("netWeight", "totalNetWeight"):
-            try:
-                same = int(have) == want
-            except (TypeError, ValueError):
-                same = False
-            if not same:
-                diff[key] = want
-        elif (have or "") != want:
-            diff[key] = want
-    return diff

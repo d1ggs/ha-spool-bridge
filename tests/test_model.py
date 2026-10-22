@@ -1,5 +1,5 @@
 from custom_components.spool_bridge.model import (
-    SlotRef, bambuddy_slot, cloud_field_diff, cloud_payload, default_filament_id, extra_get,
+    SlotRef, bambuddy_slot, default_filament_id, extra_get,
     extra_value, hex6, slot_from_bambuddy, slot_from_flat, spool_filament_id, tag_to_spool_id, tray_color,
 )
 
@@ -82,44 +82,3 @@ def test_bambuddy_slot_mapping():
     assert slot_from_bambuddy(255, 0) == SlotRef("ext", 0)
     assert slot_from_bambuddy(128, 0) is None
     assert slot_from_bambuddy(255, 2) is None
-
-
-def _spool(**over):
-    spool = {
-        "id": 1,
-        "remaining_weight": 412.4,
-        "initial_weight": 1000,
-        "filament": {
-            "name": "PolyTerra PLA", "material": "PLA", "color_hex": "333333",
-            "weight": 1000, "vendor": {"name": "Polymaker"}, "extra": {},
-        },
-        "extra": {},
-    }
-    spool.update(over)
-    return spool
-
-
-def test_cloud_payload():
-    assert cloud_payload(_spool()) == {
-        "filamentVendor": "Polymaker", "filamentType": "PLA", "filamentName": "PolyTerra PLA",
-        "filamentId": "GFL99", "color": "#333333", "netWeight": 412, "totalNetWeight": 1000,
-    }
-
-
-def test_cloud_payload_defaults():
-    spool = {"id": 2, "remaining_weight": None, "initial_weight": None,
-             "filament": {"name": None, "material": None, "color_hex": None, "weight": None, "vendor": None}}
-    assert cloud_payload(spool) == {
-        "filamentVendor": "Generic", "filamentType": "PLA", "filamentName": "PLA",
-        "filamentId": "GFL99", "color": "#FFFFFF", "netWeight": 1000, "totalNetWeight": 1000,
-    }
-
-
-def test_cloud_field_diff():
-    wanted = cloud_payload(_spool())
-    cloud = {"filamentVendor": "Polymaker", "filamentType": "PLA", "filamentName": "PolyTerra PLA",
-             "filamentId": "GFL99", "color": "#333333FF", "netWeight": 412, "totalNetWeight": 1000}
-    assert cloud_field_diff(wanted, cloud) == {}
-    cloud["netWeight"] = 450
-    cloud["color"] = "#000000"
-    assert cloud_field_diff(wanted, cloud) == {"netWeight": 412, "color": "#333333"}

@@ -1,4 +1,4 @@
-"""Wires HA events, Spoolman, the printer and the Bambu cloud together."""
+"""Wires HA events, Spoolman, the printer and Bambuddy together."""
 
 from __future__ import annotations
 
@@ -13,12 +13,9 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
-from homeassistant.util import dt as dt_util
 
 from .assignment import Ambiguous, Assign, Expired, LoadWindow
-from .bambu_cloud import AuthExpired, BambuCloudError
 from .bambuddy import BambuddyClient, BambuddyError
-from .cloud_sync import CloudSync
 from .const import (
     ACTION_PREFIX, BAMBUDDY_SYNC_INTERVAL, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES,
     EXTRA_RFID, EXTRA_SLICER_FILAMENT, EXTRA_SLOT, EXTRA_TAG,
@@ -42,9 +39,9 @@ def _reading(state: TrayState) -> bool:
 
 
 class Bridge:
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, spoolman, cloud, printer: Printer,
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, spoolman, printer: Printer,
                  bambuddy: BambuddyClient | None = None, proxy: SpoolmanProxy | None = None) -> None:
-        self.hass, self.entry, self.spoolman, self.cloud, self.printer = hass, entry, spoolman, cloud, printer
+        self.hass, self.entry, self.spoolman, self.printer = hass, entry, spoolman, printer
         # Bambuddy in Spoolman mode: slot assignments kept in step both ways; it
         # reads Spoolman through `proxy`, which keeps the bridge the usage owner.
         self.bambuddy, self.proxy = bambuddy, proxy
@@ -53,7 +50,6 @@ class Bridge:
         self._bb_lock = asyncio.Lock()
         self._usage_ignored: deque[tuple[float, int, float]] = deque(maxlen=20)
         self.dev_id = printer.serial
-        self.sync = CloudSync(hass, cloud, spoolman, printer, self.dev_id)
         self.window = LoadWindow(LOAD_WINDOW_S, SETTLE_S)
         self.ledger = Ledger()
         self._store: Store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
@@ -62,11 +58,9 @@ class Bridge:
         self._reconcile_handle: asyncio.TimerHandle | None = None
         self._reconcile_lock = asyncio.Lock()
         self._ledger_lock = asyncio.Lock()
-        self._cloud_paused = False
-        self._first_failure: float | None = None
         self._stuck_notified = False
         self._fetching = False
-        self.state: dict[str, Any] = {"pending_jobs": 0, "last_sync": None, "last_error": None}
+        self.state: dict[str, Any] = {"pending_jobs": 0, "last_error": None}
 
     # ------------------------------------------------------------ lifecycle
 
@@ -250,7 +244,7 @@ class Bridge:
 
     async def _record_runout(self, slot: SlotRef) -> None:
         """A tray of the running print went empty. If the print carries on, the printer switched to a
-        same-filament tray (AMS auto-refill) and the cloud job still reports all grams on this slot."""
+        same-filament tray (AMS auto-refill) and the print still reports all grams on this slot."""
         runouts = self._runouts()
         progress = self.ledger.progress if self.ledger.progress is not None else self.printer.progress()
         if runouts is None or progress is None or slot.key not in self.ledger.snapshot["assignment"]:
@@ -306,9 +300,8 @@ class Bridge:
         fil = spool.get("filament") or {}
         tray = self.printer.tray_for(slot)
         profile_error: Exception | None = None
-        # In cloud mode the firmware blocks set_filament, and nothing the bridge
-        # can do changes the on-device tray label; the cloud slot binding (done
-        # by the reconcile below) is what Studio reads, so skip the futile write.
+        # Without Developer mode the firmware refuses control commands: the write
+        # would only time out, so skip it and say what to set by hand.
         control_blocked = self.printer.control_blocked()
         if tray is not None and not extra_get(spool, EXTRA_RFID) and not control_blocked:
             for attempt in range(SET_FILAMENT_ATTEMPTS):
@@ -329,12 +322,10 @@ class Bridge:
             self._error(f"set_filament {slot.key}: {profile_error}")
             await self.notify(f"{label}: assigned, but the printer profile could not be set ({profile_error}).")
         elif control_blocked and not extra_get(spool, EXTRA_RFID):
-            # Studio reads the cloud binding, so Studio prints are unaffected; only
-            # a print started from the printer screen needs the tray set by hand.
             await self.notify(
-                f"{label} ✓ — for a print started on the printer screen, set this "
-                f"tray's filament to {fil.get('name') or fil.get('material')} "
-                f"({spool_filament_id(spool)}).")
+                f"{label} ✓ — the printer refuses profile changes from Home Assistant (it needs "
+                f"LAN-only + Developer mode): set this tray's filament to "
+                f"{fil.get('name') or fil.get('material')} ({spool_filament_id(spool)}) on the printer screen.")
         else:
             await self.notify(f"{label} ✓")
 
@@ -354,12 +345,7 @@ class Bridge:
         await self.request_reconcile(now=True)
 
     async def sync_rfid_trays(self) -> None:
-        """Every loaded RFID tray has a Spoolman spool assigned to it (created if needed).
-
-        Spoolman slots come first for every tray; the Bambu cloud registration
-        follows separately, so a cloud failure (LAN-only, outage) cannot leave a
-        later tray without its slot."""
-        loaded = []
+        """Every loaded RFID tray has a Spoolman spool assigned to it (created if needed)."""
         try:
             spools = await self.spoolman.get_spools(allow_archived=False)
             if self.bambuddy is not None:
@@ -385,20 +371,8 @@ class Bridge:
                     spools.append(spool)
                 if extra_get(spool, EXTRA_SLOT) != tray.slot.key:
                     await self.assign(spool["id"], tray.slot)
-                loaded.append((tray, state, spool))
         except SpoolmanError as err:
             self._error(f"RFID sync: {err}")
-        if not loaded:
-            return
-        try:
-            cloud = await self.hass.async_add_executor_job(self.cloud.get_spools)
-            for tray, state, spool in loaded:
-                if not any(str(c.get("RFID") or "").upper() == state.rfid for c in cloud):
-                    await self.sync.register_rfid(tray, state, spool)
-        except AuthExpired:
-            self._auth_expired()
-        except (SpoolmanError, BambuCloudError) as err:
-            self._error(f"RFID cloud sync: {err}")
 
     # ------------------------------------------------------------ Bambuddy (Spoolman mode)
 
@@ -529,7 +503,7 @@ class Bridge:
         self._usage_ignored.append((time.time(), spool_id, grams))
         _LOGGER.info("Bambuddy's %.2f g on spool %s not applied: the bridge books print usage", grams, spool_id)
 
-    # ------------------------------------------------------------ cloud sync
+    # ------------------------------------------------------------ filament names
 
     @callback
     def _spoolman_event(self, event: Any) -> None:
@@ -550,35 +524,15 @@ class Bridge:
             RECONCILE_DEBOUNCE_S, lambda: self.hass.async_create_task(self._reconcile()))
 
     async def _reconcile(self) -> None:
-        if self._cloud_paused:
-            return
         async with self._reconcile_lock:
             try:
                 await self.rename_filaments()
-                done = await self.sync.reconcile()
-            except AuthExpired:
-                self._auth_expired()
-                return
-            except (SpoolmanError, BambuCloudError) as err:
-                self.sync.errors = [str(err)]
-                done = []
-            if done:
-                _LOGGER.info("Cloud sync applied: %s", done)
-            if self.sync.errors:
-                self._error("; ".join(self.sync.errors))
-                self._first_failure = self._first_failure or time.time()
-                if time.time() - self._first_failure > STUCK_AFTER_S and not self._stuck_notified:
-                    self._stuck_notified = True
-                    await self.notify(f"Cloud sync failing for over an hour: {self.sync.errors[0]}")
-            else:
-                self._first_failure, self._stuck_notified = None, False
-                self.state["last_sync"] = dt_util.utcnow()
-                async_dispatcher_send(self.hass, SIGNAL_STATE)
+            except SpoolmanError as err:
+                self._error(f"Filament names: {err}")
 
     async def rename_filaments(self) -> None:
         """Apply the optional name rules to filaments imported from the external database.
 
-        Runs before the cloud sync so the new names reach the cloud in the same pass.
         Filaments the bridge created itself are skipped: it finds them again by name.
         """
         try:
@@ -594,12 +548,6 @@ class Bridge:
             if new := renamed(filament.get("name") or "", rules):
                 await self.spoolman.patch_filament(filament["id"], {"name": new})
                 _LOGGER.info("Renamed filament %s: %r -> %r", filament["id"], filament.get("name"), new)
-
-    def _auth_expired(self) -> None:
-        if not self._cloud_paused:
-            self._cloud_paused = True
-            self._error("Bambu cloud token expired - re-authentication required")
-            self.entry.async_start_reauth(self.hass)
 
     # ------------------------------------------------------------ usage
 
@@ -668,7 +616,7 @@ class Bridge:
 
     def _local_job(self, snapshot: dict) -> dict | None:
         """Synthesize the job shape the ledger consumes from ha-bambulab's local
-        per-tray grams (no Bambu cloud). None until the printer reports weights."""
+        per-tray grams. None until the printer reports weights."""
         weights = self.printer.print_weights() or {
             int(flat): grams for flat, grams in (snapshot.get("weights") or {}).items()}
         if not weights:
@@ -716,7 +664,7 @@ class Bridge:
         """Book a print that ended while HA was down, when its snapshot is still open
         and the printer still reports that print's per-tray grams.
 
-        Without the Bambu cloud there is no job history, so a print whose weights the
+        There is no job history to fall back on, so a print whose weights the
         printer has already overwritten (another print started since) cannot be
         recovered; apply_pending still retries any entries booked but not yet written."""
         snapshot = self.ledger.snapshot
@@ -751,7 +699,6 @@ class Bridge:
             "ledger": {"pending": len(self.ledger.pending()), "entries": len(self.ledger.entries),
                        "done_jobs": len(self.ledger.done_jobs), "has_snapshot": self.ledger.snapshot is not None},
             "trays": [t.slot.key for t in self.printer.trays()],
-            "cloud_paused": self._cloud_paused,
             "bambuddy": {
                 "configured": self.bambuddy is not None,
                 "printer_id": self.bambuddy_printer,

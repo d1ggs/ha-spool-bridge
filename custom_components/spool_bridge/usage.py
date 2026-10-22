@@ -1,4 +1,4 @@
-"""Per-job filament usage: plan deductions from cloud jobs, apply them exactly once."""
+"""Per-print filament usage: plan deductions from a finished print, apply them exactly once."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
 
-from .const import JOB_MATCH_TOLERANCE_S, LEDGER_TTL_DAYS, TASK_FAILED, TASK_FINISHED, USED_WEIGHT_TOLERANCE_G
+from .const import LEDGER_TTL_DAYS, TASK_FINISHED, USED_WEIGHT_TOLERANCE_G
 from .model import hex6, slot_from_flat
 
 
@@ -43,16 +43,6 @@ class Entry:
     @classmethod
     def from_dict(cls, data: dict) -> Entry:
         return cls(**data)
-
-
-def select_job(tasks: list[dict], dev_id: str, start_ts: float | None) -> dict | None:
-    """The finished/failed job of this printer that started at `start_ts` (newest if None)."""
-    jobs = [t for t in tasks if t.get("deviceId") == dev_id and t.get("status") in (TASK_FINISHED, TASK_FAILED)]
-    if start_ts is None:
-        return jobs[0] if jobs else None
-    scored = [(abs((parse_ts(t.get("startTime")) or 0) - start_ts), t) for t in jobs]
-    scored = [s for s in scored if s[0] <= JOB_MATCH_TOLERANCE_S]
-    return min(scored, key=lambda s: s[0])[1] if scored else None
 
 
 def _filament_key(spool: dict) -> tuple[str, str]:

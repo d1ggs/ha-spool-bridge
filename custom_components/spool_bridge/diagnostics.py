@@ -2,7 +2,7 @@
 
 from homeassistant.components.diagnostics import async_redact_data
 
-REDACT = {"token", "email", "printer_serial", "bambuddy_api_key"}
+REDACT = {"printer_serial", "bambuddy_api_key"}
 
 
 async def async_get_config_entry_diagnostics(hass, entry) -> dict:

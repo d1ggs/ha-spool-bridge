@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
@@ -12,7 +12,6 @@ from homeassistant.helpers.event import async_track_state_change_event
 from .const import DOMAIN, SIGNAL_STATE
 
 SENSORS = (("pending_jobs", "Pending usage deductions", None),
-           ("last_sync", "Last cloud sync", SensorDeviceClass.TIMESTAMP),
            ("last_error", "Last error", None))
 
 

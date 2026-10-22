@@ -1,6 +1,6 @@
 reconcile:
   name: Reconcile
-  description: Mirror Spoolman into the Bambu cloud library now.
+  description: Apply the filament name rules now.
 assign:
   name: Assign spool
   description: Assign a Spoolman spool to a slot (ams:<unit>:<slot> or ext:<n>, 0-based).
