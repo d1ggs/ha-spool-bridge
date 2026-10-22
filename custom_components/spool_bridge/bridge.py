@@ -21,13 +21,13 @@ from .const import (
     ACTION_PREFIX, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES, EXTRA_RFID, EXTRA_SLOT,
     IDLE_STATES, JOB_FETCH_ATTEMPTS, JOB_FETCH_DELAY_S, LEDGER_RETRY_INTERVAL, LOAD_WINDOW_S,
     RECONCILE_DEBOUNCE_S, RECONCILE_INTERVAL, RUNOUT_PAUSE_GRACE_S, SET_FILAMENT_ATTEMPTS, SET_FILAMENT_RETRY_DELAY_S,
-    SETTLE_S, SIGNAL_STATE, STUCK_AFTER_S,
+    SETTLE_S, SIGNAL_STATE, STUCK_AFTER_S, TASK_FAILED, TASK_FINISHED,
 )
 from .model import SlotRef, extra_get, hex6, slot_from_flat, spool_filament_id, tag_to_spool_id
 from .naming import RuleError, parse_rules, renamed
 from .printer import Printer, parse_tray_state
 from .spoolman import SpoolmanError
-from .usage import Entry, Ledger, apply_entry, parse_ts, plan_entries, runout_candidates, select_job
+from .usage import Entry, Ledger, apply_entry, plan_entries, runout_candidates
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -452,25 +452,28 @@ class Bridge:
                 if await self.process_finished_job():
                     return
                 await asyncio.sleep(JOB_FETCH_DELAY_S)
-            await self.notify("A print finished but its usage has not appeared in the Bambu cloud yet; "
-                              "it will be booked on the next restart if it shows up.")
+            await self.notify("A print finished but the printer did not report its filament usage; "
+                              "it could not be booked.")
         finally:
             self._fetching = False
+
+    def _local_job(self, snapshot: dict) -> dict | None:
+        """Synthesize the job shape the ledger consumes from ha-bambulab's local
+        per-tray grams (no Bambu cloud). None until the printer reports weights."""
+        weights = self.printer.print_weights()
+        if not weights:
+            return None
+        finished = self.printer.status() == "finish"
+        return {"id": int(snapshot["start_ts"]),
+                "status": TASK_FINISHED if finished else TASK_FAILED,
+                "amsDetailMapping": [{"ams": flat, "weight": g} for flat, g in weights.items()]}
 
     async def process_finished_job(self) -> bool:
         """Book the job of the current snapshot. True when done (booked or already booked)."""
         snapshot = self.ledger.snapshot
         if snapshot is None or snapshot.get("booked"):
             return True
-        try:
-            tasks = await self.hass.async_add_executor_job(self.cloud.get_tasks, 20)
-        except AuthExpired:
-            self._auth_expired()
-            return False
-        except BambuCloudError as err:
-            self._error(f"Fetching print jobs: {err}")
-            return False
-        job = select_job(tasks, self.dev_id, snapshot["start_ts"])
+        job = self._local_job(snapshot)
         if job is None:
             return False
         async with self._ledger_lock:
@@ -500,43 +503,17 @@ class Bridge:
                 f"progress: weigh spool {backup.spool_id} to correct it.")
 
     async def catch_up_jobs(self) -> None:
-        """Book X2D jobs that ended while HA was down (current assignment, flagged)."""
-        try:
-            tasks = await self.hass.async_add_executor_job(self.cloud.get_tasks, 20)
-        except AuthExpired:
-            self._auth_expired()
-            return
-        except BambuCloudError as err:
-            self._error(f"Catch-up: {err}")
-            return
-        since = self.ledger.last_end_ts or time.time()
-        missed = [t for t in tasks if t.get("deviceId") == self.dev_id and t.get("status") in (2, 3)
-                  and str(t["id"]) not in self.ledger.done_jobs and (parse_ts(t.get("endTime")) or 0) > since]
-        if not missed:
-            return
+        """Book a print that ended while HA was down, when its snapshot is still open
+        and the printer still reports that print's per-tray grams.
+
+        Without the Bambu cloud there is no job history, so a print whose weights the
+        printer has already overwritten (another print started since) cannot be
+        recovered; apply_pending still retries any entries booked but not yet written."""
         snapshot = self.ledger.snapshot
-        snap_job = None
-        if snapshot is not None and not snapshot.get("booked"):
-            snap_job = select_job(missed, self.dev_id, snapshot["start_ts"])
-        assignment = await self._current_assignment()
-        guessed, refills = 0, []
-        async with self._ledger_lock:
-            for job in missed:
-                if job is snap_job:
-                    entries = plan_entries(job, snapshot["assignment"], self.ledger.progress, time.time(),
-                                           snapshot.get("runouts"))
-                    snapshot["booked"] = True
-                else:
-                    entries = plan_entries(job, assignment, None, time.time())
-                    guessed += 1
-                if self.ledger.add_job(job, entries, time.time()) and job is snap_job:
-                    refills = entries
-            await self._save()
+        if (snapshot is not None and not snapshot.get("booked")
+                and self.printer.status() in END_STATES and self._local_job(snapshot) is not None):
+            await self.process_finished_job()
         await self.apply_pending()
-        await self._notify_refills(refills)
-        if guessed:
-            await self.notify(f"Booked {guessed} print(s) that finished while Home Assistant was down "
-                              "using the current slot assignment; check those spools.")
 
     async def _interval_ledger(self, _now=None) -> None:
         await self.apply_pending()

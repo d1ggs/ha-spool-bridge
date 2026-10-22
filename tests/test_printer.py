@@ -31,9 +31,12 @@ def setup_printer(hass: HomeAssistant) -> None:
                                   suggested_object_id="progress")
     enc = ents.async_get_or_create("binary_sensor", "bambu_lab", f"{SERIAL}_mqtt_encryption",
                                    device_id=printer.id, suggested_object_id="mqtt_encryption")
+    pw = ents.async_get_or_create("sensor", "bambu_lab", f"{SERIAL}_print_weight", device_id=printer.id,
+                                  suggested_object_id="print_weight")
     hass.states.async_set(st.entity_id, "running")
     hass.states.async_set(pr.entity_id, "37")
     hass.states.async_set(enc.entity_id, "off")
+    hass.states.async_set(pw.entity_id, "0", {})
 
 
 async def test_trays_and_status(hass):
@@ -48,6 +51,19 @@ async def test_trays_and_status(hass):
     assert p.tray_by_entity(t.entity_id) == t
     assert p.status() == "running" and p.progress() == 37
     assert p.tray_state(t).rfid is None
+
+
+def test_print_weights_maps_trays_and_external(hass):
+    setup_printer(hass)
+    # ha-bambulab's per-tray grams: "AMS <u> Tray <t>" (1-based) and "External Spool".
+    hass.states.async_set("sensor.print_weight", "34.5",
+                          {"AMS 1 Tray 1": 19.5, "AMS 2 Tray 2": 11.9, "External Spool": 3.1})
+    assert Printer(hass, SERIAL).print_weights() == {0: 19.5, 5: 11.9, 254: 3.1}
+
+
+def test_print_weights_empty_when_sensor_blank(hass):
+    setup_printer(hass)
+    assert Printer(hass, SERIAL).print_weights() == {}
 
 
 def test_control_blocked_tracks_encryption_sensor(hass):

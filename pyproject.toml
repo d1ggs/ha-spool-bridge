@@ -1,6 +1,6 @@
 [project]
 name = "ha-spool-bridge"
-version = "0.3.2"
+version = "0.4.0"
 requires-python = ">=3.14.2"
 
 [dependency-groups]

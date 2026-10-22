@@ -5,7 +5,7 @@ Home Assistant integration that makes [Spoolman](https://github.com/Donkie/Spool
 - **Scan, load.** Scan a spool's QR label or NFC tag with the Home Assistant iPhone app, put the spool into any AMS slot. The slot that goes from empty to loaded within 5 minutes gets the spool.
 - **Profile on the printer.** The tray gets the spool's slicer profile and colour (via ha-bambulab), so Bambu Studio picks the right profile.
 - **Levels in Studio.** Every active Spoolman spool is mirrored into the Bambu cloud filament library, with its remaining grams, so Studio's Filament Manager shows it. Spools without RFID are bound to their AMS slot by the bridge; Bambu RFID spools are placed by the printer itself (the cloud refuses manual binds for them and updates them once a print uses the spool).
-- **Usage.** After each print the per-slot grams from the Bambu cloud job history are deducted in Spoolman, exactly once. Cancelled prints are booked by the progress reached.
+- **Usage.** After each print the per-slot grams the printer reports (read locally through ha-bambulab, no Bambu cloud) are deducted in Spoolman, exactly once. Cancelled prints are booked by the progress reached.
 - **AMS auto-refill.** If a tray runs dry mid-print and the printer carries on from another tray with the same material and colour, the bridge notices (the tray goes empty while the print keeps running) and splits that slot's grams by the print progress at that moment: the spool that ran out is booked up to there and left at 0 g, the backup spool gets the rest. You get one notification, since the split is an estimate: weigh the backup spool to correct it. Two runouts chained in one print are not split further.
 - **Bambu RFID spools** are picked up automatically when loaded.
 

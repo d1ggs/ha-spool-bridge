@@ -24,6 +24,8 @@ def sm_spool(sid, slot=None, archived=False, rfid=None):
 @pytest.fixture
 async def bridge(hass, monkeypatch):
     monkeypatch.setattr("custom_components.spool_bridge.printer.SET_FILAMENT_CONFIRM_S", 0)
+    monkeypatch.setattr("custom_components.spool_bridge.bridge.JOB_FETCH_DELAY_S", 0)
+    monkeypatch.setattr("custom_components.spool_bridge.bridge.JOB_FETCH_ATTEMPTS", 2)
     setup_printer(hass)
     entry = MockConfigEntry(domain="spool_bridge", data={
         "spoolman_url": "http://sm", "printer_serial": SERIAL, "notify_service": "mobile_app_test",
@@ -105,6 +107,24 @@ async def test_unavailable_tray_does_not_unassign(hass, bridge):
     bridge.spoolman.set_spool_extra.assert_not_awaited()
 
 
+def set_local_weights(hass, bridge, mapping):
+    """ha-bambulab's print_weight sensor: {"AMS u Tray t": grams, ...}."""
+    hass.states.async_set("sensor.print_weight", str(sum(mapping.values())), dict(mapping))
+
+
+async def test_finish_books_from_local_weights(hass, bridge):
+    # Usage now comes from ha-bambulab's per-tray grams, not the Bambu cloud job
+    # history. Spool 7 sits at ams:1:1 = "AMS 2 Tray 2".
+    await bridge.async_start()
+    status = bridge.printer.status_entity
+    await _start_print(hass, bridge, status)
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 12.0})
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    await bridge.process_finished_job()
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 12.0)
+
+
 async def test_finish_twice_books_once(hass, bridge):
     await bridge.async_start()
     status = bridge.printer.status_entity
@@ -112,11 +132,7 @@ async def test_finish_twice_books_once(hass, bridge):
     await hass.async_block_till_done()
     hass.states.async_set(status, "running")
     await hass.async_block_till_done()
-    start = bridge.ledger.snapshot["start_ts"]
-    from datetime import UTC, datetime
-    iso = datetime.fromtimestamp(start, UTC).isoformat().replace("+00:00", "Z")
-    bridge.cloud.get_tasks.return_value = [{"id": 5, "deviceId": SERIAL, "status": 2, "startTime": iso,
-                                            "endTime": iso, "amsDetailMapping": [{"ams": 5, "weight": 12.0}]}]
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 12.0})
     for _ in range(2):
         hass.states.async_set(status, "finish")
         await hass.async_block_till_done()
@@ -133,14 +149,6 @@ async def _start_print(hass, bridge, status):
     await hass.async_block_till_done()
 
 
-def _job_for(bridge, status_code=2, start_offset=0):
-    from datetime import UTC, datetime
-    start = bridge.ledger.snapshot["start_ts"] + start_offset
-    iso = datetime.fromtimestamp(start, UTC).isoformat().replace("+00:00", "Z")
-    return {"id": 9, "deviceId": SERIAL, "status": status_code, "startTime": iso, "endTime": iso,
-            "amsDetailMapping": [{"ams": 5, "weight": 20.0}]}
-
-
 async def test_offline_blip_keeps_snapshot_and_books(hass, bridge):
     await bridge.async_start()
     status = bridge.printer.status_entity
@@ -152,7 +160,7 @@ async def test_offline_blip_keeps_snapshot_and_books(hass, bridge):
         await hass.async_block_till_done()
     assert bridge.ledger.snapshot["start_ts"] == first["start_ts"]
     assert bridge.ledger.progress == 40
-    bridge.cloud.get_tasks.return_value = [_job_for(bridge)]
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 20.0})
     hass.states.async_set(status, "offline")
     await hass.async_block_till_done()
     hass.states.async_set(status, "finish")  # offline -> finish must still book
@@ -161,13 +169,17 @@ async def test_offline_blip_keeps_snapshot_and_books(hass, bridge):
     bridge.spoolman.use_weight.assert_awaited_once_with(7, 20.0)
 
 
-async def test_catch_up_uses_snapshot(hass, bridge):
+async def test_catch_up_books_open_snapshot_from_local_weights(hass, bridge):
+    # Print ended (failed, 50%) while HA was down: on restart the snapshot is open
+    # and the printer still reports the per-tray grams, so catch-up books it.
     await bridge.async_start()
     await _start_print(hass, bridge, bridge.printer.status_entity)
     bridge.ledger.progress = 50
-    bridge.ledger.last_end_ts = bridge.ledger.snapshot["start_ts"] - 10
     bridge.spools[7]["extra"] = {}  # spool 7 unloaded since the snapshot
-    bridge.cloud.get_tasks.return_value = [_job_for(bridge, status_code=3)]
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 20.0})
+    bridge._fetching = True  # suppress the live end-transition loop; exercise catch_up directly
+    hass.states.async_set(bridge.printer.status_entity, "failed")
+    await hass.async_block_till_done()
     await bridge.catch_up_jobs()
     bridge.spoolman.use_weight.assert_awaited_once_with(7, 10.0)
 
@@ -340,7 +352,7 @@ async def test_runout_job_is_split_and_reported(hass, bridge):
     await _runout_print(hass, bridge)
     bridge.spoolman.patch_spool = AsyncMock()
     await _set_tray(hass, bridge, "ams:1:1", empty=True)
-    bridge.cloud.get_tasks.return_value = [_job_for(bridge)]
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 20.0})
     hass.states.async_set(bridge.printer.status_entity, "finish")
     await hass.async_block_till_done()
     await bridge.process_finished_job()

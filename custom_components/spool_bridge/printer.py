@@ -20,6 +20,20 @@ _AMS_INDEX_RE = re.compile(r"_AMS_(?P<n>\d+)$")
 _HEX32 = re.compile(r"^[0-9A-F]{32}$")
 
 
+_WEIGHT_AMS_RE = re.compile(r"^AMS (?P<unit>\d+) Tray (?P<slot>\d+)$")
+_WEIGHT_EXT = {"External Spool": 254, "External Spool 2": 255}
+
+
+def _weight_key_to_flat(name: str) -> int | None:
+    """ha-bambulab print_weight attribute name -> flat slot index (AMS HT is out of scope)."""
+    if name in _WEIGHT_EXT:
+        return _WEIGHT_EXT[name]
+    m = _WEIGHT_AMS_RE.match(name)
+    if m:
+        return (int(m.group("unit")) - 1) * 4 + (int(m.group("slot")) - 1)
+    return None
+
+
 class FilamentNotApplied(Exception):
     """The tray did not take the profile, although the service call returned."""
 
@@ -123,6 +137,28 @@ class Printer:
 
     def tray_state(self, tray: TrayInfo) -> TrayState | None:
         return parse_tray_state(self.hass.states.get(tray.entity_id))
+
+    def print_weights(self) -> dict[int, float]:
+        """Per-slot grams of the current/just-finished print, keyed by flat slot index
+        (AMS unit*4 + slot; 254/255 external) to match the cloud job's amsDetailMapping.
+
+        Read from ha-bambulab's print_weight sensor, which parses the sliced 3MF, so
+        no Bambu cloud job history is needed."""
+        entity = er.async_get(self.hass).async_get_entity_id(
+            "sensor", BAMBULAB_DOMAIN, f"{self.serial}_print_weight")
+        state = self.hass.states.get(entity) if entity else None
+        if state is None:
+            return {}
+        out: dict[int, float] = {}
+        for name, grams in state.attributes.items():
+            flat = _weight_key_to_flat(name)
+            try:
+                value = float(grams)
+            except (TypeError, ValueError):
+                continue
+            if flat is not None and value:
+                out[flat] = value
+        return out
 
     def control_blocked(self) -> bool:
         """True when the firmware blocks control commands (cloud mode, MQTT signing
