@@ -25,11 +25,16 @@ from .const import (
 )
 from .model import SlotRef, extra_get, hex6, slot_from_flat, spool_filament_id, tag_to_spool_id
 from .naming import RuleError, parse_rules, renamed
-from .printer import Printer, parse_tray_state
+from .printer import Printer, TrayState, parse_tray_state
 from .spoolman import SpoolmanError
 from .usage import Entry, Ledger, apply_entry, plan_entries, runout_candidates
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _reading(state: TrayState) -> bool:
+    """ha-bambulab shows a tray as "?" while the AMS reads a freshly loaded spool."""
+    return not state.empty and state.material == "?"
 
 
 class Bridge:
@@ -68,7 +73,8 @@ class Bridge:
             async_track_time_interval(self.hass, self._interval_reconcile, RECONCILE_INTERVAL),
             async_track_time_interval(self.hass, self._interval_ledger, LEDGER_RETRY_INTERVAL),
         ]
-        watched = [e for e in (self.printer.status_entity, self.printer.progress_entity) if e]
+        watched = [e for e in (self.printer.status_entity, self.printer.progress_entity,
+                               self.printer.weight_entity) if e]
         if watched:
             self._unsubs.append(async_track_state_change_event(self.hass, watched, self._printer_event))
         self._tasks.append(self.entry.async_create_background_task(
@@ -184,15 +190,27 @@ class Bridge:
         old, new = parse_tray_state(old_state), parse_tray_state(new_state)
         # External holders report "empty" whenever they are not the active feed
         # (ha-bambulab), so their transitions say nothing about loading.
-        if tray is None or tray.slot.kind != "ams" or old is None or new is None:
+        if tray is None or tray.slot.kind != "ams" or new is None:
+            return
+        if old is None:
+            # Back from unavailable (HA or ha-bambulab restart): the startup sync ran
+            # before the trays were known, so an RFID spool may still lack its slot.
+            if new.rfid and not new.empty:
+                await self.sync_rfid_trays()
             return
         if new.active and not old.active:
             await self._confirm_backup(tray.slot)
-        if old.empty == new.empty:
-            return
         if new.empty:
-            await self._record_runout(tray.slot)
-            await self.unassign(tray.slot)
+            if not old.empty:
+                await self._record_runout(tray.slot)
+                await self.unassign(tray.slot)
+            return
+        # "?" (not empty, no tag yet) while the AMS reads the spool: decide once it settles.
+        if _reading(new):
+            return
+        if not old.empty and not _reading(old):
+            if new.rfid and new.rfid != old.rfid:  # a different RFID spool without an empty in between
+                await self.sync_rfid_trays()
             return
         if new.rfid:
             await self.sync_rfid_trays()
@@ -304,7 +322,12 @@ class Bridge:
         await self.request_reconcile(now=True)
 
     async def sync_rfid_trays(self) -> None:
-        """Every loaded RFID tray has a Spoolman spool assigned to it (created if needed)."""
+        """Every loaded RFID tray has a Spoolman spool assigned to it (created if needed).
+
+        Spoolman slots come first for every tray; the Bambu cloud registration
+        follows separately, so a cloud failure (LAN-only, outage) cannot leave a
+        later tray without its slot."""
+        loaded = []
         try:
             spools = await self.spoolman.get_spools(allow_archived=False)
             for tray in self.printer.trays():
@@ -326,13 +349,20 @@ class Bridge:
                     spools.append(spool)
                 if extra_get(spool, EXTRA_SLOT) != tray.slot.key:
                     await self.assign(spool["id"], tray.slot)
-                cloud = await self.hass.async_add_executor_job(self.cloud.get_spools)
+                loaded.append((tray, state, spool))
+        except SpoolmanError as err:
+            self._error(f"RFID sync: {err}")
+        if not loaded:
+            return
+        try:
+            cloud = await self.hass.async_add_executor_job(self.cloud.get_spools)
+            for tray, state, spool in loaded:
                 if not any(str(c.get("RFID") or "").upper() == state.rfid for c in cloud):
                     await self.sync.register_rfid(tray, state, spool)
         except AuthExpired:
             self._auth_expired()
         except (SpoolmanError, BambuCloudError) as err:
-            self._error(f"RFID sync: {err}")
+            self._error(f"RFID cloud sync: {err}")
 
     # ------------------------------------------------------------ cloud sync
 
@@ -342,6 +372,7 @@ class Bridge:
             self.hass.async_create_task(self.request_reconcile())
 
     async def _interval_reconcile(self, _now=None) -> None:
+        await self.sync_rfid_trays()  # heals a slot missed by an event (restart, odd AMS sequence)
         await self.request_reconcile(now=True)
 
     async def request_reconcile(self, now: bool = False) -> None:
@@ -412,6 +443,15 @@ class Bridge:
         new, old = event.data.get("new_state"), event.data.get("old_state")
         if new is None:
             return
+        if event.data["entity_id"] == self.printer.weight_entity:
+            # ha-bambulab can split the grams per tray only while it knows the tray
+            # mapping, which the printer sends once at print start: an HA restart
+            # mid-print leaves just the total. Keep the split from when it appeared.
+            snapshot = self.ledger.snapshot
+            if snapshot is not None and not snapshot.get("booked") and (weights := self.printer.print_weights()):
+                snapshot["weights"] = {str(flat): grams for flat, grams in weights.items()}
+                self.hass.async_create_task(self._save())
+            return
         if event.data["entity_id"] == self.printer.progress_entity:
             if self.printer.status() in BUSY_STATES:
                 try:
@@ -460,7 +500,8 @@ class Bridge:
     def _local_job(self, snapshot: dict) -> dict | None:
         """Synthesize the job shape the ledger consumes from ha-bambulab's local
         per-tray grams (no Bambu cloud). None until the printer reports weights."""
-        weights = self.printer.print_weights()
+        weights = self.printer.print_weights() or {
+            int(flat): grams for flat, grams in (snapshot.get("weights") or {}).items()}
         if not weights:
             return None
         finished = self.printer.status() == "finish"

@@ -370,3 +370,91 @@ async def test_chained_runout_keeps_first_backup(hass, bridge):
     await _set_tray(hass, bridge, "ams:1:2", empty=True)  # it runs dry too
     await _set_tray(hass, bridge, "ams:1:3", empty=False, active=True)
     assert bridge.ledger.snapshot["runouts"]["ams:1:1"]["backup"] == "ams:1:2"
+
+
+RFID = "A689FDFF4FDE4AA0B30562C1AFED141F"
+
+
+async def tray(hass, entity_id, state, empty, uuid="", kind="PLA"):
+    hass.states.async_set(entity_id, state, {"empty": empty, "tray_uuid": uuid, "type": kind})
+    await hass.async_block_till_done()
+
+
+async def test_rfid_read_after_reading_state_syncs(hass, bridge, freezer):
+    # Seen live 2026-10-21: the AMS shows "?" (not empty, no UUID) while it reads
+    # the tag, then the RFID spool a second later. The RFID must be synced, and
+    # the reading state must not count as a third-party load for a scanned spool.
+    await bridge.async_start()
+    bridge.sync_rfid_trays = AsyncMock()
+    await bridge.on_tag("spool/show/42")
+    ent = tray_entity(bridge, "ams:0:3")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    await tray(hass, ent, "Bambu PLA Basic", False, uuid=RFID)
+    bridge.sync_rfid_trays.assert_awaited_once()
+    freezer.tick(11)
+    await bridge.async_tick()
+    assert not any(c.args[0] == 42 for c in bridge.spoolman.set_spool_extra.await_args_list)
+
+
+async def test_third_party_load_through_reading_state_assigns(hass, bridge, freezer):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    await tray(hass, ent, "Generic PLA", False, uuid="0" * 32)
+    freezer.tick(11)
+    await bridge.async_tick()
+    bridge.spoolman.set_spool_extra.assert_any_await(42, {"bambu_slot": "ams:0:2"}, location="X2D AMS 1 · slot 3")
+
+
+async def test_rfid_tray_back_after_restart_syncs(hass, bridge):
+    # At HA start the bridge's own sync runs before ha-bambulab reports the trays,
+    # so a tray coming back from unavailable with an RFID must trigger it.
+    await bridge.async_start()
+    bridge.sync_rfid_trays = AsyncMock()
+    ent = tray_entity(bridge, "ams:0:3")
+    hass.states.async_set(ent, "unavailable", {})
+    await hass.async_block_till_done()
+    await tray(hass, ent, "Bambu PLA Basic", False, uuid=RFID)
+    bridge.sync_rfid_trays.assert_awaited_once()
+
+
+async def test_interval_reconcile_heals_rfid_slots(hass, bridge):
+    await bridge.async_start()
+    bridge.sync_rfid_trays = AsyncMock()
+    await bridge._interval_reconcile()
+    bridge.sync_rfid_trays.assert_awaited_once()
+
+
+async def test_rfid_slot_assigned_even_when_cloud_fails(hass, bridge):
+    # LAN-only: a Bambu cloud failure must not stop Spoolman slot assignment.
+    from custom_components.spool_bridge.bambu_cloud import BambuCloudError
+    other = "1370EEF9084F4DFE934999BB300E663D"
+    bridge.spools[5] = sm_spool(5, rfid=RFID)
+    bridge.spools[6] = sm_spool(6, rfid=other)
+    bridge.cloud.get_spools.side_effect = BambuCloudError("offline")
+    bridge.assign = AsyncMock()
+    await tray(hass, tray_entity(bridge, "ams:0:3"), "Bambu PLA Basic", False, uuid=RFID)
+    await tray(hass, tray_entity(bridge, "ams:1:3"), "Bambu Support", False, uuid=other)
+    await bridge.sync_rfid_trays()
+    assert {c.args for c in bridge.assign.await_args_list} == {
+        (5, SlotRef("ams", 0, 3)), (6, SlotRef("ams", 1, 3))}
+
+
+async def test_weights_survive_restart_mid_print(hass, bridge):
+    # Seen live 2026-10-22: HA restarted mid-print, ha-bambulab lost the tray
+    # mapping (sent once at print start) and kept only the total, so nothing was
+    # booked. The bridge keeps the per-tray grams from when they first appeared.
+    await bridge.async_start()
+    status = bridge.printer.status_entity
+    await _start_print(hass, bridge, status)
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 12.0})
+    await hass.async_block_till_done()
+    hass.states.async_set("sensor.print_weight", "12.0", {})  # after the restart: total only
+    await hass.async_block_till_done()
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    await bridge.process_finished_job()
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 12.0)

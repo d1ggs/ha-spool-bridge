@@ -147,6 +147,10 @@ class Printer:
     def progress_entity(self) -> str | None:
         return self._entity(f"{self.serial}_print_progress")
 
+    @property
+    def weight_entity(self) -> str | None:
+        return self._entity(f"{self.serial}_print_weight")
+
     def name(self) -> str:
         devices = dr.async_get(self.hass).async_get_devices(identifiers={(BAMBULAB_DOMAIN, self.serial)})
         device = devices[0] if devices else None
@@ -189,8 +193,7 @@ class Printer:
 
         Read from ha-bambulab's print_weight sensor, which parses the sliced 3MF, so
         no Bambu cloud job history is needed."""
-        entity = er.async_get(self.hass).async_get_entity_id(
-            "sensor", BAMBULAB_DOMAIN, f"{self.serial}_print_weight")
+        entity = self.weight_entity
         state = self.hass.states.get(entity) if entity else None
         if state is None:
             return {}
