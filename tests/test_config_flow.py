@@ -60,3 +60,23 @@ async def test_options_flow_validates_and_saves_name_rules(hass):
     r = await hass.config_entries.options.async_configure(r["flow_id"], {"filament_name_rules": "™"})
     assert r["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options == {"filament_name_rules": "™"}
+
+
+async def test_options_flow_checks_and_saves_bambuddy(hass):
+    entry = MockConfigEntry(domain="spool_bridge", data={"printer_serial": SERIAL})
+    entry.add_to_hass(hass)
+    from custom_components.spool_bridge.bambuddy import BambuddyError
+    with patch("custom_components.spool_bridge.config_flow.BambuddyClient") as client_cls:
+        client_cls.return_value.printer_id = AsyncMock(side_effect=BambuddyError("HTTP 401: bad key"))
+        r = await hass.config_entries.options.async_init(entry.entry_id)
+        r = await hass.config_entries.options.async_configure(r["flow_id"], {
+            "bambuddy_url": "http://127.0.0.1:8000", "bambuddy_api_key": " bad "})
+        assert r["errors"] == {"base": "bambuddy"}
+        assert "401" in r["description_placeholders"]["error"]
+        client_cls.return_value.printer_id = AsyncMock(return_value=1)
+        r = await hass.config_entries.options.async_configure(r["flow_id"], {
+            "bambuddy_url": "http://127.0.0.1:8000", "bambuddy_api_key": " good "})
+    assert r["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {"filament_name_rules": "", "bambuddy_url": "http://127.0.0.1:8000",
+                             "bambuddy_api_key": "good"}
+    assert client_cls.call_args.args[1:] == ("http://127.0.0.1:8000", "good")

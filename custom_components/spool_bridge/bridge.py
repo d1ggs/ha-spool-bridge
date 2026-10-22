@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import logging
 import time
 from typing import Any
@@ -16,9 +17,11 @@ from homeassistant.util import dt as dt_util
 
 from .assignment import Ambiguous, Assign, Expired, LoadWindow
 from .bambu_cloud import AuthExpired, BambuCloudError
+from .bambuddy import BambuddyClient, BambuddyError
 from .cloud_sync import CloudSync
 from .const import (
-    ACTION_PREFIX, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES, EXTRA_RFID, EXTRA_SLOT,
+    ACTION_PREFIX, BAMBUDDY_SYNC_INTERVAL, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES,
+    EXTRA_RFID, EXTRA_SLICER_FILAMENT, EXTRA_SLOT, EXTRA_TAG,
     IDLE_STATES, JOB_FETCH_ATTEMPTS, JOB_FETCH_DELAY_S, LEDGER_RETRY_INTERVAL, LOAD_WINDOW_S,
     RECONCILE_DEBOUNCE_S, RECONCILE_INTERVAL, RUNOUT_PAUSE_GRACE_S, SET_FILAMENT_ATTEMPTS, SET_FILAMENT_RETRY_DELAY_S,
     SETTLE_S, SIGNAL_STATE, STUCK_AFTER_S, TASK_FAILED, TASK_FINISHED,
@@ -27,6 +30,7 @@ from .model import SlotRef, extra_get, hex6, slot_from_flat, spool_filament_id, 
 from .naming import RuleError, parse_rules, renamed
 from .printer import Printer, TrayState, parse_tray_state
 from .spoolman import SpoolmanError
+from .spoolman_proxy import SpoolmanProxy
 from .usage import Entry, Ledger, apply_entry, plan_entries, runout_candidates
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,8 +42,16 @@ def _reading(state: TrayState) -> bool:
 
 
 class Bridge:
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, spoolman, cloud, printer: Printer) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, spoolman, cloud, printer: Printer,
+                 bambuddy: BambuddyClient | None = None, proxy: SpoolmanProxy | None = None) -> None:
         self.hass, self.entry, self.spoolman, self.cloud, self.printer = hass, entry, spoolman, cloud, printer
+        # Bambuddy in Spoolman mode: slot assignments kept in step both ways; it
+        # reads Spoolman through `proxy`, which keeps the bridge the usage owner.
+        self.bambuddy, self.proxy = bambuddy, proxy
+        self.bambuddy_printer: int | None = None
+        self._bb_seen: dict[SlotRef, int] | None = None  # Bambuddy's table as last read/written
+        self._bb_lock = asyncio.Lock()
+        self._usage_ignored: deque[tuple[float, int, float]] = deque(maxlen=20)
         self.dev_id = printer.serial
         self.sync = CloudSync(hass, cloud, spoolman, printer, self.dev_id)
         self.window = LoadWindow(LOAD_WINDOW_S, SETTLE_S)
@@ -77,6 +89,13 @@ class Bridge:
                                self.printer.weight_entity) if e]
         if watched:
             self._unsubs.append(async_track_state_change_event(self.hass, watched, self._printer_event))
+        if self.proxy is not None:
+            try:
+                await self.proxy.start()
+            except OSError as err:
+                self._error(f"Spoolman gateway for Bambuddy did not start on {self.proxy.url}: {err}")
+        if self.bambuddy is not None:
+            self._unsubs.append(async_track_time_interval(self.hass, self._interval_bambuddy, BAMBUDDY_SYNC_INTERVAL))
         self._tasks.append(self.entry.async_create_background_task(
             self.hass, self.spoolman.listen(self._spoolman_event), f"{DOMAIN} spoolman websocket"))
         self._tasks.append(self.entry.async_create_background_task(
@@ -93,11 +112,14 @@ class Bridge:
         self._tasks.clear()
         if self._reconcile_handle:
             self._reconcile_handle.cancel()
+        if self.proxy is not None:
+            await self.proxy.stop()
 
     async def _startup(self) -> None:
         await self.sync_rfid_trays()
         await self.catch_up_jobs()
         await self.request_reconcile(now=True)
+        await self.sync_from_bambuddy()
 
     async def _save(self) -> None:
         self.state["pending_jobs"] = len(self.ledger.pending())
@@ -261,7 +283,7 @@ class Bridge:
         if hit:
             await self._save()
 
-    async def assign(self, spool_id: int, slot: SlotRef) -> None:
+    async def assign(self, spool_id: int, slot: SlotRef, *, from_bambuddy: bool = False) -> None:
         try:
             spools = await self.spoolman.get_spools(allow_archived=False)
             spool = next((s for s in spools if s["id"] == spool_id), None)
@@ -276,6 +298,10 @@ class Bridge:
         except SpoolmanError as err:
             self._error(f"Assign failed: {err}")
             await self.notify(f"Could not assign spool {spool_id}: Spoolman unreachable")
+            return
+        if from_bambuddy:
+            # Assigned in Bambuddy's UI, which has already set the tray profile.
+            await self.request_reconcile(now=True)
             return
         fil = spool.get("filament") or {}
         tray = self.printer.tray_for(slot)
@@ -296,6 +322,7 @@ class Bridge:
                     profile_error = err
                     if attempt + 1 < SET_FILAMENT_ATTEMPTS:
                         await asyncio.sleep(SET_FILAMENT_RETRY_DELAY_S)
+        await self._push_to_bambuddy(spool, slot)
         await self.request_reconcile(now=True)
         label = f"{fil.get('name') or fil.get('material')} → {slot.label(name)}"
         if profile_error is not None:
@@ -311,14 +338,19 @@ class Bridge:
         else:
             await self.notify(f"{label} ✓")
 
-    async def unassign(self, slot: SlotRef) -> None:
+    async def unassign(self, slot: SlotRef, *, from_bambuddy: bool = False) -> None:
+        cleared: list[int] = []
         try:
             for spool in await self.spoolman.get_spools(allow_archived=False):
                 if extra_get(spool, EXTRA_SLOT) == slot.key:
                     await self.spoolman.set_spool_extra(spool["id"], {EXTRA_SLOT: None}, location=None)
+                    cleared.append(spool["id"])
         except SpoolmanError as err:
             self._error(f"Unassign failed: {err}")
             return
+        if not from_bambuddy:
+            for spool_id in cleared:
+                await self._bambuddy_unassign(spool_id)
         await self.request_reconcile(now=True)
 
     async def sync_rfid_trays(self) -> None:
@@ -330,6 +362,8 @@ class Bridge:
         loaded = []
         try:
             spools = await self.spoolman.get_spools(allow_archived=False)
+            if self.bambuddy is not None:
+                await self._sync_rfid_tags(spools)
             for tray in self.printer.trays():
                 state = self.printer.tray_state(tray)
                 if tray.slot.kind != "ams" or state is None or state.empty or not state.rfid:
@@ -343,9 +377,11 @@ class Bridge:
                         material=state.material or "PLA", color_hex=hex6(state.color), weight=total,
                         spool_weight=250, bambu_filament_id=state.filament_id or None)
                     remaining = total * state.remain / 100 if state.remain >= 0 else total
+                    extra = {EXTRA_RFID: state.rfid}
+                    if self.bambuddy is not None:
+                        extra[EXTRA_TAG] = state.rfid
                     spool = await self.spoolman.create_spool(
-                        filament, initial_weight=total, remaining_weight=remaining,
-                        extra={EXTRA_RFID: state.rfid}, location=None)
+                        filament, initial_weight=total, remaining_weight=remaining, extra=extra, location=None)
                     spools.append(spool)
                 if extra_get(spool, EXTRA_SLOT) != tray.slot.key:
                     await self.assign(spool["id"], tray.slot)
@@ -363,6 +399,135 @@ class Bridge:
             self._auth_expired()
         except (SpoolmanError, BambuCloudError) as err:
             self._error(f"RFID cloud sync: {err}")
+
+    # ------------------------------------------------------------ Bambuddy (Spoolman mode)
+
+    async def _sync_rfid_tags(self, spools: list[dict]) -> None:
+        """Bambuddy links an RFID tray to the Spoolman spool whose `tag` holds the
+        tray UUID; without it, it would offer to add the spool again."""
+        for spool in spools:
+            rfid = extra_get(spool, EXTRA_RFID)
+            if rfid and (extra_get(spool, EXTRA_TAG) or "").upper() != rfid.upper():
+                await self.spoolman.set_spool_extra(spool["id"], {EXTRA_TAG: rfid})
+
+    async def _bambuddy_ready(self) -> bool:
+        if self.bambuddy is None:
+            return False
+        if self.bambuddy_printer is None:
+            try:
+                self.bambuddy_printer = await self.bambuddy.printer_id(self.printer.serial)
+            except BambuddyError as err:
+                self._error(f"Bambuddy: {err}")
+                return False
+        return True
+
+    def _slots_in_use(self) -> set[SlotRef] | None:
+        """Slots the running print draws from (None: printing, but unknown which)."""
+        if self.printer.status() not in BUSY_STATES:
+            return set()
+        weights = (self.ledger.snapshot or {}).get("weights")
+        if not weights:
+            return None
+        return {slot for flat in weights if (slot := slot_from_flat(int(flat))) is not None}
+
+    def _rfid_at(self, slot: SlotRef) -> bool:
+        tray = self.printer.tray_for(slot)
+        state = self.printer.tray_state(tray) if tray is not None else None
+        return bool(state and not state.empty and state.rfid)
+
+    async def _push_to_bambuddy(self, spool: dict, slot: SlotRef) -> None:
+        if extra_get(spool, EXTRA_RFID) or not await self._bambuddy_ready():
+            return
+        async with self._bb_lock:
+            await self._bb_push(spool, slot)
+
+    async def _bb_push(self, spool: dict, slot: SlotRef) -> bool:
+        """Show a bridge assignment on Bambuddy's slot (caller holds _bb_lock).
+
+        RFID spools are linked by tag instead: a Bambuddy assignment sends a tray
+        profile, which would replace the one the printer read from the tag."""
+        if extra_get(spool, EXTRA_RFID):
+            return False
+        try:
+            if extra_get(spool, EXTRA_SLICER_FILAMENT) is None:
+                # Bambuddy derives the profile it sends from this per-spool preset;
+                # the bridge's profile keeps both pushes identical.
+                await self.spoolman.set_spool_extra(spool["id"], {EXTRA_SLICER_FILAMENT: spool_filament_id(spool)})
+            await self.bambuddy.unassign(spool["id"])  # a spool sits in one slot
+            await self.bambuddy.assign(self.bambuddy_printer, spool["id"], slot)
+        except (BambuddyError, SpoolmanError) as err:
+            self._error(f"Bambuddy assign {slot.key}: {err}")
+            return False
+        if self._bb_seen is not None:
+            self._bb_seen = {s: i for s, i in self._bb_seen.items() if i != spool["id"]}
+            self._bb_seen[slot] = spool["id"]
+        return True
+
+    async def _bambuddy_unassign(self, spool_id: int) -> None:
+        if not await self._bambuddy_ready():
+            return
+        async with self._bb_lock:
+            try:
+                await self.bambuddy.unassign(spool_id)
+            except BambuddyError as err:
+                self._error(f"Bambuddy unassign: {err}")
+                return
+            if self._bb_seen is not None:
+                self._bb_seen = {s: i for s, i in self._bb_seen.items() if i != spool_id}
+
+    async def _interval_bambuddy(self, _now=None) -> None:
+        await self.sync_from_bambuddy()
+
+    async def sync_from_bambuddy(self) -> None:
+        """Keep Bambuddy's slot table and Spoolman's slots in step.
+
+        A change on Bambuddy's side since the last look (an assignment made or
+        removed in its UI) is applied to Spoolman; a bridge assignment Bambuddy
+        lacks is pushed to it. On the first look (startup) Spoolman wins any
+        disagreement. RFID trays are the bridge's alone."""
+        if not await self._bambuddy_ready():
+            return
+        async with self._bb_lock:
+            try:
+                remote = await self.bambuddy.assignments(self.bambuddy_printer)
+                spools = await self.spoolman.get_spools(allow_archived=False)
+            except (BambuddyError, SpoolmanError) as err:
+                self._error(f"Bambuddy sync: {err}")
+                return
+            by_id = {s["id"]: s for s in spools}
+            local: dict[SlotRef, int] = {}
+            for spool in spools:
+                slot = SlotRef.parse(extra_get(spool, EXTRA_SLOT))
+                if slot is not None and not extra_get(spool, EXTRA_RFID):
+                    local[slot] = spool["id"]
+            seen = self._bb_seen
+            for slot, spool_id in remote.items():
+                if local.get(slot) == spool_id or spool_id not in by_id or self._rfid_at(slot):
+                    continue
+                if seen is None and (slot in local or spool_id in local.values()):
+                    continue  # first look: Spoolman's side is pushed below
+                if seen is not None and seen.get(slot) == spool_id:
+                    continue  # Bambuddy unchanged: the bridge moved on, pushed below
+                await self.assign(spool_id, slot, from_bambuddy=True)
+                local = {s: i for s, i in local.items() if i != spool_id}
+                local[slot] = spool_id
+            for slot, spool_id in (seen or {}).items():
+                if slot not in remote and local.get(slot) == spool_id:
+                    await self.unassign(slot, from_bambuddy=True)
+                    del local[slot]
+            self._bb_seen = dict(remote)
+            # A Bambuddy assignment sends the slot's profile to the printer: leave
+            # trays a running print draws from until it ends.
+            in_use = self._slots_in_use()
+            for slot, spool_id in local.items():
+                if remote.get(slot) != spool_id and in_use is not None and slot not in in_use:
+                    await self._bb_push(by_id[spool_id], slot)
+
+    @callback
+    def on_bambuddy_usage(self, spool_id: int, grams: float) -> None:
+        """Bambuddy tried to book usage through the Spoolman gateway; the bridge books it."""
+        self._usage_ignored.append((time.time(), spool_id, grams))
+        _LOGGER.info("Bambuddy's %.2f g on spool %s not applied: the bridge books print usage", grams, spool_id)
 
     # ------------------------------------------------------------ cloud sync
 
@@ -466,6 +631,10 @@ class Bridge:
         if new in BUSY_STATES and old in IDLE_STATES:
             assignment = await self._current_assignment()
             self.ledger.snapshot = {"start_ts": time.time(), "assignment": assignment, "runouts": {}, "booked": False}
+            # Reprinting the same plate leaves the split unchanged, so no change
+            # event follows: take it now; a different print's split replaces it.
+            if weights := self.printer.print_weights():
+                self.ledger.snapshot["weights"] = {str(flat): grams for flat, grams in weights.items()}
             self.ledger.progress = None
             await self._save()
         elif new == "pause" and (runouts := (self.ledger.snapshot or {}).get("runouts")):
@@ -583,4 +752,11 @@ class Bridge:
                        "done_jobs": len(self.ledger.done_jobs), "has_snapshot": self.ledger.snapshot is not None},
             "trays": [t.slot.key for t in self.printer.trays()],
             "cloud_paused": self._cloud_paused,
+            "bambuddy": {
+                "configured": self.bambuddy is not None,
+                "printer_id": self.bambuddy_printer,
+                "slots": None if self._bb_seen is None else {s.key: i for s, i in self._bb_seen.items()},
+                "gateway": self.proxy.url if self.proxy is not None else None,
+                "usage_ignored": list(self._usage_ignored),
+            },
         }

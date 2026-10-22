@@ -1,6 +1,6 @@
 """Config flow: Spoolman + printer + phone, Bambu login (or token import), migration.
 
-Options flow: the optional filament name rules."""
+Options flow: the optional filament name rules and Bambuddy link."""
 
 from __future__ import annotations
 
@@ -13,16 +13,18 @@ from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
-    SelectSelector, SelectSelectorConfig, SelectSelectorMode, TextSelector, TextSelectorConfig,
+    SelectSelector, SelectSelectorConfig, SelectSelectorMode, TextSelector, TextSelectorConfig, TextSelectorType,
 )
 
 from .bambu_cloud import (
     AuthFailed, BambuCloudClient, BambuCloudError, CloudflareBlocked, CodeIncorrect,
     EmailCodeRequired, TfaRequired,
 )
+from .bambuddy import BambuddyClient, BambuddyError
 from .const import (
-    BAMBU_FILAMENTS_DOMAIN, BAMBULAB_DOMAIN, CONF_EMAIL, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, CONF_PRINTER_SERIAL,
-    CONF_REGION, CONF_SPOOLMAN_URL, CONF_TOKEN, DEFAULT_SPOOLMAN_URL, DOMAIN,
+    BAMBU_FILAMENTS_DOMAIN, BAMBULAB_DOMAIN, CONF_BAMBUDDY_KEY, CONF_BAMBUDDY_URL, CONF_EMAIL, CONF_NAME_RULES,
+    CONF_NOTIFY_SERVICE, CONF_PRINTER_SERIAL, CONF_REGION, CONF_SPOOLMAN_URL, CONF_TOKEN, DEFAULT_BAMBUDDY_URL,
+    DEFAULT_SPOOLMAN_URL, DOMAIN,
 )
 from .migration import describe, import_spools, plan_migration
 from .naming import RuleError, parse_rules
@@ -188,16 +190,31 @@ class SpoolBridgeOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         detail = ""
         if user_input is not None:
+            data = {CONF_NAME_RULES: user_input.get(CONF_NAME_RULES, "")}
+            key = (user_input.get(CONF_BAMBUDDY_KEY) or "").strip()
+            url = (user_input.get(CONF_BAMBUDDY_URL) or "").strip() or DEFAULT_BAMBUDDY_URL
             try:
-                parse_rules(user_input.get(CONF_NAME_RULES, ""))
+                parse_rules(data[CONF_NAME_RULES])
             except RuleError as err:
                 errors[CONF_NAME_RULES], detail = "invalid_rules", str(err)
-            else:
-                return self.async_create_entry(data=user_input)
-        current = (user_input or self.config_entry.options).get(CONF_NAME_RULES, "")
+            if not errors and key:
+                client = BambuddyClient(async_get_clientsession(self.hass), url, key)
+                try:
+                    await client.printer_id(self.config_entry.data[CONF_PRINTER_SERIAL])
+                except BambuddyError as err:
+                    errors["base"], detail = "bambuddy", str(err)
+                else:
+                    data.update({CONF_BAMBUDDY_URL: url, CONF_BAMBUDDY_KEY: key})
+            if not errors:
+                return self.async_create_entry(data=data)
+        current = user_input or self.config_entry.options
         schema = vol.Schema({
-            vol.Optional(CONF_NAME_RULES, description={"suggested_value": current}):
+            vol.Optional(CONF_NAME_RULES, description={"suggested_value": current.get(CONF_NAME_RULES, "")}):
                 TextSelector(TextSelectorConfig(multiline=True)),
+            vol.Optional(CONF_BAMBUDDY_URL,
+                         description={"suggested_value": current.get(CONF_BAMBUDDY_URL, DEFAULT_BAMBUDDY_URL)}): str,
+            vol.Optional(CONF_BAMBUDDY_KEY, description={"suggested_value": current.get(CONF_BAMBUDDY_KEY, "")}):
+                TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
         })
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors,
                                     description_placeholders={"error": detail})

@@ -9,7 +9,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import EXTRA_CLOUD_ID, EXTRA_FILAMENT_ID, EXTRA_RFID, EXTRA_SLOT
+from .const import EXTRA_CLOUD_ID, EXTRA_FILAMENT_ID, EXTRA_RFID, EXTRA_SLICER_FILAMENT, EXTRA_SLOT, EXTRA_TAG
 from .model import extra_value, hex6
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,6 +21,10 @@ EXTRA_FIELDS = (
     ("spool", EXTRA_RFID, "Bambu RFID"),
     ("spool", EXTRA_SLOT, "Bambu slot"),
     ("filament", EXTRA_FILAMENT_ID, "Bambu filament profile id"),
+)
+BAMBUDDY_FIELDS = (
+    ("spool", EXTRA_TAG, "Tag"),
+    ("spool", EXTRA_SLICER_FILAMENT, "Slicer filament"),
 )
 DENSITY = {"PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.21}
 
@@ -56,8 +60,8 @@ class SpoolmanClient:
             raise SpoolmanError("Not a Spoolman server")
         return result
 
-    async def ensure_extra_fields(self) -> None:
-        for entity, key, name in EXTRA_FIELDS:
+    async def ensure_extra_fields(self, more: tuple[tuple[str, str, str], ...] = ()) -> None:
+        for entity, key, name in (*EXTRA_FIELDS, *more):
             existing = await self._req("GET", f"/field/{entity}") or []
             if not any(f.get("key") == key for f in existing):
                 await self._req("POST", f"/field/{entity}/{key}", json={"name": name, "field_type": "text"})

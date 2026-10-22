@@ -1,6 +1,6 @@
 from custom_components.spool_bridge.model import (
-    SlotRef, cloud_field_diff, cloud_payload, default_filament_id, extra_get,
-    extra_value, hex6, slot_from_flat, spool_filament_id, tag_to_spool_id, tray_color,
+    SlotRef, bambuddy_slot, cloud_field_diff, cloud_payload, default_filament_id, extra_get,
+    extra_value, hex6, slot_from_bambuddy, slot_from_flat, spool_filament_id, tag_to_spool_id, tray_color,
 )
 
 
@@ -57,6 +57,31 @@ def test_filament_id_defaults():
     assert default_filament_id(None) == "GFL99"
     spool = {"filament": {"material": "PLA", "extra": {"bambu_filament_id": '"GFL03"'}}}
     assert spool_filament_id(spool) == "GFL03"
+
+
+def test_spool_preset_from_bambuddy_wins_when_it_is_a_printer_profile():
+    # Bambuddy keeps a per-spool preset in spool.extra.bambu_slicer_filament, as a
+    # filament id ("GFA01"), a setting id ("GFSA01_07") or something the printer
+    # cannot take directly (cloud user preset, local preset number, Orca UUID).
+    fil = {"material": "PLA", "extra": {"bambu_filament_id": '"GFL03"'}}
+    def with_preset(value):
+        return {"filament": fil, "extra": {"bambu_slicer_filament": f'"{value}"'}}
+    assert spool_filament_id(with_preset("GFA01")) == "GFA01"
+    assert spool_filament_id(with_preset("GFSA01_07")) == "GFA01"
+    assert spool_filament_id(with_preset("PMPL07")) == "PMPL07"
+    for unusable in ("PFUS990b6e19965353", "PFCN12ab", "38", "0f8e2c1a-1b2c-4d5e-8f90-123456789abc"):
+        assert spool_filament_id(with_preset(unusable)) == "GFL03"
+
+
+def test_bambuddy_slot_mapping():
+    # Bambuddy numbers AMS units 0.., and both external holders as AMS 255
+    # (tray 0 = left/254, tray 1 = right/255); AMS HT (128+) is out of scope.
+    assert bambuddy_slot(SlotRef("ams", 1, 2)) == (1, 2)
+    assert bambuddy_slot(SlotRef("ext", 1)) == (255, 1)
+    assert slot_from_bambuddy(1, 2) == SlotRef("ams", 1, 2)
+    assert slot_from_bambuddy(255, 0) == SlotRef("ext", 0)
+    assert slot_from_bambuddy(128, 0) is None
+    assert slot_from_bambuddy(255, 2) is None
 
 
 def _spool(**over):

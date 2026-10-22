@@ -13,8 +13,16 @@ CONF_REGION = "region"
 CONF_EMAIL = "email"
 CONF_TOKEN = "token"
 CONF_NAME_RULES = "filament_name_rules"
+CONF_BAMBUDDY_URL = "bambuddy_url"
+CONF_BAMBUDDY_KEY = "bambuddy_api_key"
 
 DEFAULT_SPOOLMAN_URL = "http://3b88f413-spoolman:8000"
+# Bambuddy's HA add-on and HA Core both use host networking.
+DEFAULT_BAMBUDDY_URL = "http://127.0.0.1:8000"
+# Bambuddy's Spoolman URL: the bridge's loopback pass-through (spoolman_proxy).
+SPOOLMAN_PROXY_HOST = "127.0.0.1"
+SPOOLMAN_PROXY_PORT = 7913
+BAMBUDDY_SYNC_INTERVAL = timedelta(seconds=30)
 BAMBULAB_DOMAIN = "bambu_lab"
 BAMBU_FILAMENTS_DOMAIN = "bambu_filaments"
 
@@ -22,6 +30,9 @@ EXTRA_CLOUD_ID = "bambu_cloud_id"
 EXTRA_RFID = "bambu_rfid"
 EXTRA_SLOT = "bambu_slot"
 EXTRA_FILAMENT_ID = "bambu_filament_id"
+# Bambuddy's spool fields: the RFID/NFC tag it links a tray by, and its per-spool preset.
+EXTRA_TAG = "tag"
+EXTRA_SLICER_FILAMENT = "bambu_slicer_filament"
 
 LOAD_WINDOW_S = 300
 SETTLE_S = 10

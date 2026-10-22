@@ -66,6 +66,25 @@ def slot_from_flat(ams: Any) -> SlotRef | None:
     return None
 
 
+BAMBUDDY_EXTERNAL_AMS = 255
+
+
+def bambuddy_slot(slot: SlotRef) -> tuple[int, int]:
+    """Bambuddy's (ams_id, tray_id): AMS units as-is, both external holders as AMS 255."""
+    if slot.kind == "ams":
+        return slot.unit, slot.slot
+    return BAMBUDDY_EXTERNAL_AMS, slot.unit
+
+
+def slot_from_bambuddy(ams_id: int, tray_id: int) -> SlotRef | None:
+    """Inverse of bambuddy_slot (AMS HT units, 128+, are out of scope)."""
+    if ams_id == BAMBUDDY_EXTERNAL_AMS:
+        return SlotRef("ext", tray_id) if tray_id in (0, 1) else None
+    if 0 <= ams_id < 8 and 0 <= tray_id < 4:
+        return SlotRef("ams", ams_id, tray_id)
+    return None
+
+
 _TAG_RE = re.compile(r"^(?:spool-(\d+)|spool/show/(\d+))$")
 
 
@@ -116,9 +135,29 @@ def default_filament_id(material: str | None) -> str:
     return MATERIAL_DEFAULT_IDS.get((material or "").strip().upper(), FALLBACK_FILAMENT_ID)
 
 
+_PROFILE_ID_RE = re.compile(r"^[A-Z][A-Z0-9]{3,7}$")
+
+
+def preset_filament_id(value: str | None) -> str | None:
+    """A printer filament id from a Bambuddy per-spool preset, or None.
+
+    Bambuddy stores filament ids ("GFA01"), setting ids ("GFSA01_07") and
+    presets the printer cannot take as a tray profile: cloud user presets
+    (PFUS…/PFCN…), local preset numbers and Orca UUIDs."""
+    base = (value or "").strip().split("_")[0].upper()
+    if base.startswith(("PFUS", "PFCN")) or not _PROFILE_ID_RE.match(base):
+        return None
+    if base.startswith("GFS") and len(base) >= 5:
+        return "GF" + base[3:]
+    return base
+
+
 def spool_filament_id(spool: dict) -> str:
+    """The tray profile for a spool: a per-spool preset chosen in Bambuddy wins
+    over the filament's profile id, then the material's generic profile."""
     filament = spool.get("filament") or {}
-    return extra_get(filament, "bambu_filament_id") or default_filament_id(filament.get("material"))
+    return (preset_filament_id(extra_get(spool, "bambu_slicer_filament"))
+            or extra_get(filament, "bambu_filament_id") or default_filament_id(filament.get("material")))
 
 
 def cloud_payload(spool: dict) -> dict:
