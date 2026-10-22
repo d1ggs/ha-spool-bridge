@@ -215,9 +215,15 @@ async def test_assign_skips_set_filament_when_control_blocked(hass, bridge):
     await bridge.async_start()
     hass.states.async_set("binary_sensor.mqtt_encryption", "on")
     await bridge.assign(42, SlotRef("ams", 0, 2))
+    msg = bridge.notes[-1]["message"]
     assert bridge.filament_calls == []
-    assert "✓" in bridge.notes[-1]["message"]
+    assert "✓" in msg
     assert bridge.state["last_error"] is None
+    # The on-device tray can't be set in cloud mode, so screen-started prints
+    # need a manual pick; the notification names exactly what to select.
+    assert "screen" in msg.lower()
+    assert "PolyTerra PLA" in msg  # the Spoolman filament name
+    assert "GFL99" in msg  # the Bambu profile id to pick on the printer
 
 
 async def test_set_filament_ignored_by_printer_is_reported(hass, bridge):

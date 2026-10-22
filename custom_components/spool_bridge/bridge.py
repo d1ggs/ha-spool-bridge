@@ -265,7 +265,8 @@ class Bridge:
         # In cloud mode the firmware blocks set_filament, and nothing the bridge
         # can do changes the on-device tray label; the cloud slot binding (done
         # by the reconcile below) is what Studio reads, so skip the futile write.
-        if tray is not None and not extra_get(spool, EXTRA_RFID) and not self.printer.control_blocked():
+        control_blocked = self.printer.control_blocked()
+        if tray is not None and not extra_get(spool, EXTRA_RFID) and not control_blocked:
             for attempt in range(SET_FILAMENT_ATTEMPTS):
                 try:
                     await self.printer.set_filament(
@@ -282,6 +283,13 @@ class Bridge:
         if profile_error is not None:
             self._error(f"set_filament {slot.key}: {profile_error}")
             await self.notify(f"{label}: assigned, but the printer profile could not be set ({profile_error}).")
+        elif control_blocked and not extra_get(spool, EXTRA_RFID):
+            # Studio reads the cloud binding, so Studio prints are unaffected; only
+            # a print started from the printer screen needs the tray set by hand.
+            await self.notify(
+                f"{label} ✓ — for a print started on the printer screen, set this "
+                f"tray's filament to {fil.get('name') or fil.get('material')} "
+                f"({spool_filament_id(spool)}).")
         else:
             await self.notify(f"{label} ✓")
 
