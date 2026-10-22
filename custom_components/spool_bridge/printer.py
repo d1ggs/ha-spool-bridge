@@ -160,13 +160,20 @@ class Printer:
                 out[flat] = value
         return out
 
-    def control_blocked(self) -> bool:
-        """True when the firmware blocks control commands (cloud mode, MQTT signing
-        required). set_filament and other writes are then rejected or dropped."""
-        entity = er.async_get(self.hass).async_get_entity_id(
-            "binary_sensor", BAMBULAB_DOMAIN, f"{self.serial}_mqtt_encryption")
+    def _binary_on(self, unique_id: str) -> bool:
+        entity = er.async_get(self.hass).async_get_entity_id("binary_sensor", BAMBULAB_DOMAIN, unique_id)
         state = self.hass.states.get(entity) if entity else None
         return state is not None and state.state == "on"
+
+    def control_blocked(self) -> bool:
+        """True when the firmware blocks control commands (cloud mode, MQTT signing
+        required). set_filament and other writes are then rejected or dropped.
+
+        mqtt_encryption only says the firmware supports signing and stays on in
+        LAN + Developer mode, where unsigned commands work; developer_lan_mode is
+        ha-bambulab's reading of the printer's "signature required" flag."""
+        return (self._binary_on(f"{self.serial}_mqtt_encryption")
+                and not self._binary_on(f"{self.serial}_developer_lan_mode"))
 
     def status(self) -> str | None:
         state = self.hass.states.get(self.status_entity) if self.status_entity else None

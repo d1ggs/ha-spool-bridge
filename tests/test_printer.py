@@ -31,11 +31,16 @@ def setup_printer(hass: HomeAssistant) -> None:
                                   suggested_object_id="progress")
     enc = ents.async_get_or_create("binary_sensor", "bambu_lab", f"{SERIAL}_mqtt_encryption",
                                    device_id=printer.id, suggested_object_id="mqtt_encryption")
+    dev = ents.async_get_or_create("binary_sensor", "bambu_lab", f"{SERIAL}_developer_lan_mode",
+                                   device_id=printer.id, suggested_object_id="developer_lan_mode")
     pw = ents.async_get_or_create("sensor", "bambu_lab", f"{SERIAL}_print_weight", device_id=printer.id,
                                   suggested_object_id="print_weight")
     hass.states.async_set(st.entity_id, "running")
     hass.states.async_set(pr.entity_id, "37")
-    hass.states.async_set(enc.entity_id, "off")
+    # An X2D in LAN-only + Developer mode, as seen live: the encryption sensor
+    # stays on (the firmware supports signing), Developer mode lifts the block.
+    hass.states.async_set(enc.entity_id, "on")
+    hass.states.async_set(dev.entity_id, "on")
     hass.states.async_set(pw.entity_id, "0", {})
 
 
@@ -66,12 +71,17 @@ def test_print_weights_empty_when_sensor_blank(hass):
     assert Printer(hass, SERIAL).print_weights() == {}
 
 
-def test_control_blocked_tracks_encryption_sensor(hass):
+def test_control_blocked_only_without_developer_mode(hass):
     setup_printer(hass)
     p = Printer(hass, SERIAL)
+    # LAN + Developer mode: signing-capable firmware, but unsigned commands work.
     assert p.control_blocked() is False
-    hass.states.async_set("binary_sensor.mqtt_encryption", "on")
+    # Cloud / LAN without Developer mode: signing required, commands rejected.
+    hass.states.async_set("binary_sensor.developer_lan_mode", "off")
     assert p.control_blocked() is True
+    # Firmware without signing support never blocks.
+    hass.states.async_set("binary_sensor.mqtt_encryption", "off")
+    assert p.control_blocked() is False
 
 
 def test_control_not_blocked_when_sensor_missing(hass):

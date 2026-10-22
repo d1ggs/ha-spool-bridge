@@ -225,7 +225,7 @@ async def test_assign_skips_set_filament_when_control_blocked(hass, bridge):
     # Cloud-mode firmware blocks set_filament; the cloud slot binding carries the
     # profile instead, so the bridge must not try, and must still report success.
     await bridge.async_start()
-    hass.states.async_set("binary_sensor.mqtt_encryption", "on")
+    hass.states.async_set("binary_sensor.developer_lan_mode", "off")
     await bridge.assign(42, SlotRef("ams", 0, 2))
     msg = bridge.notes[-1]["message"]
     assert bridge.filament_calls == []
