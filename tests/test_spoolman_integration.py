@@ -30,12 +30,12 @@ async def test_roundtrip(client):
     ) == fil
     spool = await client.create_spool(
         fil, initial_weight=1000, remaining_weight=500,
-        extra={"bambu_cloud_id": "123"}, location=None,
+        extra={"bambu_rfid": "0123456789ABCDEF0123456789ABCDEF"}, location=None,
     )
     sid = spool["id"]
     updated = await client.set_spool_extra(sid, {"bambu_slot": "ams:1:0"}, location="X2D AMS 2 · slot 1")
     assert updated["extra"]["bambu_slot"] == '"ams:1:0"'
-    assert updated["extra"]["bambu_cloud_id"] == '"123"'  # other keys kept
+    assert updated["extra"]["bambu_rfid"] == '"0123456789ABCDEF0123456789ABCDEF"'  # other keys kept
     assert updated["location"] == "X2D AMS 2 · slot 1"
     cleared = await client.set_spool_extra(sid, {"bambu_slot": None}, location=None)
     assert "bambu_slot" not in cleared["extra"]
