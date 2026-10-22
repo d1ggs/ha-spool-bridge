@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import html
+from pathlib import Path
 import re
 import time
 from typing import Any
+from xml.etree import ElementTree
+import zipfile
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -18,6 +22,47 @@ _AMS_TRAY_RE = re.compile(r"^[^_]+_(?P<serial>[^_]+)_AMS_(?P<ams>[^_]+)_tray_(?P
 _EXT_RE = re.compile(r"^[^_]+_(?P<serial>[^_]+)_ExternalSpool(?P<n>\d*)_external_spool$")
 _AMS_INDEX_RE = re.compile(r"_AMS_(?P<n>\d+)$")
 _HEX32 = re.compile(r"^[0-9A-F]{32}$")
+
+
+_PLATE_GCODE_RE = re.compile(r"plate_(\d+)\.gcode$")
+_MODEL_META_RE = re.compile(r'<metadata name="(Title|Designer)">(.*?)</metadata>', re.DOTALL)
+_MODEL_HEAD_BYTES = 65536  # the metadata precedes the meshes in 3D/3dmodel.model
+
+
+@dataclass(frozen=True)
+class ModelInfo:
+    title: str | None  # the model's name as published (MakerWorld title), not the file name
+    designer: str | None
+    plate: int | None
+    plate_name: str | None
+    file: str
+
+
+def _plate_metadata(archive: zipfile.ZipFile, name: str) -> list[dict[str, str]]:
+    try:
+        root = ElementTree.fromstring(archive.read(name))
+    except (KeyError, ElementTree.ParseError):
+        return []
+    return [{m.get("key"): m.get("value") for m in plate.findall("metadata")} for plate in root.iter("plate")]
+
+
+def read_3mf_model(path: Path, plate: int | None) -> ModelInfo | None:
+    """Title, designer and plate name from a sliced 3MF. ``plate`` is the plate the
+    printer reports; without it, the plate the file was sliced for. Blocking I/O."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            with archive.open("3D/3dmodel.model") as model:
+                head = model.read(_MODEL_HEAD_BYTES).decode("utf-8", "replace")
+            if plate is None:
+                index = next((p.get("index") for p in _plate_metadata(archive, "Metadata/slice_info.config")), None)
+                plate = _int(index, 0) or None
+            names = {p.get("plater_id"): p.get("plater_name") for p in
+                     _plate_metadata(archive, "Metadata/model_settings.config")}
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    meta = {k: html.unescape(v).strip() or None for k, v in _MODEL_META_RE.findall(head)}
+    return ModelInfo(title=meta.get("Title"), designer=meta.get("Designer"), plate=plate,
+                     plate_name=names.get(str(plate)) or None, file=path.name)
 
 
 _WEIGHT_AMS_RE = re.compile(r"^AMS (?P<unit>\d+) Tray (?P<slot>\d+)$")
@@ -159,6 +204,42 @@ class Printer:
             if flat is not None and value:
                 out[flat] = value
         return out
+
+    @property
+    def model_source_entities(self) -> list[str]:
+        """ha-bambulab sensors whose change means a different print or plate."""
+        found = (self._entity(f"{self.serial}_gcode_file_downloaded"), self._entity(f"{self.serial}_gcode_file"))
+        return [e for e in found if e]
+
+    def _model_cache_roots(self) -> list[Path]:
+        # ha-bambulab's file cache (coordinator.get_file_cache_directory), and the
+        # local media dir it falls back to when /config/www is not writable.
+        roots = [Path(self.hass.config.path("www/media/ha-bambulab", self.serial))]
+        if media := self.hass.config.media_dirs.get("local"):
+            roots.append(Path(media) / "ha-bambulab" / self.serial)
+        return roots
+
+    async def current_model(self) -> ModelInfo | None:
+        """The model being (or last) printed, read from the 3MF ha-bambulab cached.
+
+        ha-bambulab reports the G-code it extracted as "<size>-<name>.gcode.gcode"
+        next to "<size>-<name>.gcode.3mf"; the printer's own G-code path names the
+        plate ("/data/Metadata/plate_16.gcode")."""
+        downloaded = self.hass.states.get(self._entity(f"{self.serial}_gcode_file_downloaded") or "")
+        gcode = self.hass.states.get(self._entity(f"{self.serial}_gcode_file") or "")
+        if downloaded is None or not downloaded.state.endswith(".gcode"):
+            return None
+        name = downloaded.state.removesuffix(".gcode") + ".3mf"
+        plate = _PLATE_GCODE_RE.search(gcode.state) if gcode else None
+        roots = self._model_cache_roots()
+
+        def find_and_read() -> ModelInfo | None:
+            for root in roots:
+                for path in (root / "prints").rglob(name) if (root / "prints").is_dir() else ():
+                    return read_3mf_model(path, int(plate.group(1)) if plate else None)
+            return None
+
+        return await self.hass.async_add_executor_job(find_and_read)
 
     def _binary_on(self, unique_id: str) -> bool:
         entity = er.async_get(self.hass).async_get_entity_id("binary_sensor", BAMBULAB_DOMAIN, unique_id)
