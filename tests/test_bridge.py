@@ -365,7 +365,7 @@ async def test_chained_runout_keeps_first_backup(hass, bridge):
     assert bridge.ledger.snapshot["runouts"]["ams:1:1"]["backup"] == "ams:1:2"
 
 
-RFID = "A689FDFF4FDE4AA0B30562C1AFED141F"
+RFID = "0123456789ABCDEF0123456789ABCDEF"
 
 
 async def tray(hass, entity_id, state, empty, uuid="", kind="PLA"):
@@ -422,7 +422,7 @@ async def test_interval_reconcile_heals_rfid_slots(hass, bridge):
 
 
 async def test_rfid_slots_assigned_for_every_tray(hass, bridge):
-    other = "1370EEF9084F4DFE934999BB300E663D"
+    other = "FEDCBA9876543210FEDCBA9876543210"
     bridge.spools[5] = sm_spool(5, rfid=RFID)
     bridge.spools[6] = sm_spool(6, rfid=other)
     bridge.assign = AsyncMock()
