@@ -73,5 +73,17 @@ async def test_options_flow_checks_and_saves_bambuddy(hass):
             "bambuddy_url": "http://127.0.0.1:8000", "bambuddy_api_key": " good "})
     assert r["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options == {"filament_name_rules": "", "bambuddy_url": "http://127.0.0.1:8000",
-                             "bambuddy_api_key": "good"}
+                             "bambuddy_api_key": "good", "gateway_port": 7913}
     assert client_cls.call_args.args[1:] == ("http://127.0.0.1:8000", "good")
+
+
+async def test_options_flow_saves_gateway_port(hass):
+    entry = MockConfigEntry(domain="spool_bridge", data={"printer_serial": SERIAL})
+    entry.add_to_hass(hass)
+    with patch("custom_components.spool_bridge.config_flow.BambuddyClient") as client_cls:
+        client_cls.return_value.printer_id = AsyncMock(return_value=1)
+        r = await hass.config_entries.options.async_init(entry.entry_id)
+        r = await hass.config_entries.options.async_configure(r["flow_id"], {
+            "bambuddy_api_key": "k", "gateway_port": 7920})
+    assert r["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["gateway_port"] == 7920

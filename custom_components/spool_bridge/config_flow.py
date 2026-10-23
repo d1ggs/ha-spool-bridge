@@ -16,8 +16,8 @@ from homeassistant.helpers.selector import (
 
 from .bambuddy import BambuddyClient, BambuddyError
 from .const import (
-    BAMBULAB_DOMAIN, CONF_BAMBUDDY_KEY, CONF_BAMBUDDY_URL, CONF_NAME_RULES, CONF_NOTIFY_SERVICE,
-    CONF_PRINTER_SERIAL, CONF_SPOOLMAN_URL, DEFAULT_BAMBUDDY_URL, DEFAULT_SPOOLMAN_URL, DOMAIN,
+    BAMBULAB_DOMAIN, CONF_BAMBUDDY_KEY, CONF_BAMBUDDY_URL, CONF_GATEWAY_PORT, CONF_NAME_RULES, CONF_NOTIFY_SERVICE,
+    CONF_PRINTER_SERIAL, CONF_SPOOLMAN_URL, DEFAULT_BAMBUDDY_URL, DEFAULT_SPOOLMAN_URL, DOMAIN, SPOOLMAN_PROXY_PORT,
 )
 from .naming import RuleError, parse_rules
 from .spoolman import SpoolmanClient, SpoolmanError
@@ -83,7 +83,8 @@ class SpoolBridgeOptionsFlow(OptionsFlow):
                 except BambuddyError as err:
                     errors["base"], detail = "bambuddy", str(err)
                 else:
-                    data.update({CONF_BAMBUDDY_URL: url, CONF_BAMBUDDY_KEY: key})
+                    data.update({CONF_BAMBUDDY_URL: url, CONF_BAMBUDDY_KEY: key,
+                                 CONF_GATEWAY_PORT: int(user_input.get(CONF_GATEWAY_PORT) or SPOOLMAN_PROXY_PORT)})
             if not errors:
                 return self.async_create_entry(data=data)
         current = user_input or self.config_entry.options
@@ -94,6 +95,9 @@ class SpoolBridgeOptionsFlow(OptionsFlow):
                          description={"suggested_value": current.get(CONF_BAMBUDDY_URL, DEFAULT_BAMBUDDY_URL)}): str,
             vol.Optional(CONF_BAMBUDDY_KEY, description={"suggested_value": current.get(CONF_BAMBUDDY_KEY, "")}):
                 TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
+            vol.Optional(CONF_GATEWAY_PORT,
+                         description={"suggested_value": current.get(CONF_GATEWAY_PORT, SPOOLMAN_PROXY_PORT)}):
+                vol.All(vol.Coerce(int), vol.Range(min=1024, max=65535)),
         })
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors,
                                     description_placeholders={"error": detail})

@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -448,3 +448,14 @@ async def test_weights_survive_restart_mid_print(hass, bridge):
     await hass.async_block_till_done()
     await bridge.process_finished_job()
     bridge.spoolman.use_weight.assert_awaited_once_with(7, 12.0)
+
+
+async def test_job_fetch_loop_does_not_hold_up_startup(hass, bridge):
+    # A tracked task would keep HA's startup from finishing for up to 10 minutes
+    # while the bridge waits for a finished print's grams.
+    with patch.object(bridge.entry, "async_create_background_task") as background, \
+            patch.object(bridge.entry, "async_create_task") as tracked:
+        await bridge.on_status_change("idle", "running")
+        await bridge.on_status_change("running", "finish")
+    assert background.called and not tracked.called
+    background.call_args.args[1].close()  # the coroutine, never scheduled here

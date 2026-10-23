@@ -1,5 +1,6 @@
 """The bridge keeps Bambuddy (Spoolman mode) and Spoolman in step."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -162,3 +163,38 @@ async def test_sync_defers_pushes_for_slots_the_running_print_uses(hass, bridge,
     await hass.async_block_till_done()
     await bridge.sync_from_bambuddy()
     assert bb.table == {SlotRef("ams", 0, 2): 42, SlotRef("ams", 1, 1): 7}
+
+
+async def test_sync_removes_stale_bambuddy_rows(hass, bridge, bb):
+    # Seen live 2026-10-22: rows left from an earlier Bambuddy session pointed at
+    # deleted spools, and at an id Spoolman had since reused for another spool.
+    await idle(hass, bridge)
+    await tray(hass, tray_entity(bridge, "ams:0:3"), "Bambu PLA Basic", False, uuid=RFID)
+    bb.table.update({SlotRef("ams", 1, 1): 7, SlotRef("ams", 0, 0): 999, SlotRef("ams", 0, 3): 42})
+    await bridge.sync_from_bambuddy()
+    assert bb.table == {SlotRef("ams", 1, 1): 7}
+
+
+async def test_no_cleanup_when_spoolman_lists_nothing(hass, bridge, bb):
+    await idle(hass, bridge)
+    bridge.spools.clear()  # an empty answer is more likely a glitch than an empty inventory
+    bb.table[SlotRef("ams", 0, 0)] = 999
+    await bridge.sync_from_bambuddy()
+    assert bb.table == {SlotRef("ams", 0, 0): 999}
+
+
+async def test_print_start_nudges_bambuddy_to_fetch_the_print_file(hass, bridge, bb, monkeypatch):
+    # Bambuddy looks for the 3MF once, before the printer has copied it to the
+    # USB stick; asking for the cover later makes it fetch the file and fill in
+    # the print's archive.
+    from tests.test_bridge import _start_print
+    monkeypatch.setattr("custom_components.spool_bridge.bridge.BAMBUDDY_NUDGE_DELAYS_S", (0, 0))
+    bb.nudge_print_file = AsyncMock()
+    await bridge.async_start()
+    await _start_print(hass, bridge, bridge.printer.status_entity)
+    for _ in range(50):  # the nudges run in a background task
+        if bb.nudge_print_file.await_count == 2:
+            break
+        await asyncio.sleep(0)
+    assert bb.nudge_print_file.await_count == 2
+    assert bb.nudge_print_file.await_args.args == (1,)

@@ -60,3 +60,15 @@ class BambuddyClient:
 
     async def unassign(self, spool_id: int) -> None:
         await self._req("DELETE", f"{_ASSIGNMENTS}/{int(spool_id)}", ok_404=True)
+
+    async def nudge_print_file(self, printer_id: int) -> None:
+        """Ask for the running print's cover: Bambuddy downloads the print's 3MF
+        for it and fills in the print's archive if it started without one."""
+        try:
+            async with self._session.get(
+                f"{self._base}/api/v1/printers/{int(printer_id)}/cover", headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                await resp.read()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise BambuddyError(f"cover: {err}") from err

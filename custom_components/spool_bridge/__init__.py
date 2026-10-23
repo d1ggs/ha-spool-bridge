@@ -14,7 +14,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .bambuddy import BambuddyClient
 from .bridge import Bridge
 from .const import (
-    CONF_BAMBUDDY_KEY, CONF_BAMBUDDY_URL, CONF_PRINTER_SERIAL, CONF_SPOOLMAN_URL, DEFAULT_BAMBUDDY_URL, DOMAIN,
+    CONF_BAMBUDDY_KEY, CONF_BAMBUDDY_URL, CONF_GATEWAY_PORT, CONF_PRINTER_SERIAL, CONF_SPOOLMAN_URL, DEFAULT_BAMBUDDY_URL, DOMAIN,
     SPOOLMAN_PROXY_HOST, SPOOLMAN_PROXY_PORT,
 )
 from .model import SlotRef
@@ -74,7 +74,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     bambuddy = proxy = None
     if bambuddy_key:
         bambuddy = BambuddyClient(session, entry.options.get(CONF_BAMBUDDY_URL) or DEFAULT_BAMBUDDY_URL, bambuddy_key)
-        proxy = SpoolmanProxy(session, entry.data[CONF_SPOOLMAN_URL], SPOOLMAN_PROXY_HOST, SPOOLMAN_PROXY_PORT,
+        port = entry.options.get(CONF_GATEWAY_PORT) or SPOOLMAN_PROXY_PORT
+        proxy = SpoolmanProxy(session, entry.data[CONF_SPOOLMAN_URL], SPOOLMAN_PROXY_HOST, port,
                               lambda spool_id, grams: entry.runtime_data.on_bambuddy_usage(spool_id, grams))
     bridge = Bridge(hass, entry, spoolman, Printer(hass, entry.data[CONF_PRINTER_SERIAL]),
                     bambuddy=bambuddy, proxy=proxy)

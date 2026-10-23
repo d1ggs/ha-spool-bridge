@@ -55,12 +55,14 @@ Each line is `pattern => replacement`, or just `pattern` to delete what it match
 - **Slots, both ways.** A spool the bridge assigns (scan → load, the `assign` service) appears on Bambuddy's AMS slot within seconds. A spool you assign or remove in Bambuddy (its slot dialog, its QR labels) is recorded in Spoolman within 30 seconds, so the print's usage lands on it. Bambu RFID spools are linked through Spoolman's `tag` field instead, which the bridge fills in.
 - **Usage is booked once, by the bridge.** Bambuddy deducts usage itself and has no setting to stop it; on an X2D it usually can't read the print file at print start, so its numbers would be partial. Bambuddy therefore reaches Spoolman through the bridge's gateway at `http://127.0.0.1:7913`, which passes everything through (spools, edits, labels) and answers Bambuddy's usage deductions without applying them.
 - **Profiles match.** Bambuddy sends the slot's profile to the printer when a spool is assigned there; the bridge records the profile it uses on the spool (`bambu_slicer_filament`), so both send the same. A preset you pick for a spool in Bambuddy is used by the bridge too. While a print runs, the bridge holds back catch-up assignments for the trays that print uses.
+- **Complete print archives.** With a USB stick in the X2D and *Store sent files on external storage* on, the printer copies each Bambu Studio print onto the stick, but only after Bambuddy has looked for it at print start. The bridge asks Bambuddy again 1 and 3 minutes in, which fills in the print's archive.
+- **Tidy slot table.** Bambuddy rows that point at deleted spools, or at another spool on an RFID tray, are removed (Spoolman reuses spool ids, so such a row could otherwise name the wrong spool).
 
 Setup:
 
 1. Bambuddy → Settings → API Keys: create a key with **Read status** and **Manage inventory**, limited to the printer.
-2. Home Assistant → Spool Bridge → Configure: Bambuddy URL (`http://127.0.0.1:8000` for the Bambuddy add-on) and the key. The bridge checks both and restarts.
-3. Bambuddy → Settings → Spoolman: enable it with the URL `http://127.0.0.1:7913` and AMS sync **manual**.
+2. Home Assistant → Spool Bridge → Configure: Bambuddy URL (`http://127.0.0.1:8000` for the Bambuddy add-on) and the key; change the gateway port (default 7913) only if something else uses it. The bridge checks the URL and key and restarts.
+3. Bambuddy → Settings → Spoolman: enable it with the URL `http://127.0.0.1:7913` (or your gateway port) and AMS sync **manual**.
 
 The gateway listens on the Home Assistant host's loopback only, so only apps with host networking (like the Bambuddy add-on) can reach it.
 

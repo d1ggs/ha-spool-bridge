@@ -19,7 +19,11 @@ DEFAULT_BAMBUDDY_URL = "http://127.0.0.1:8000"
 # Bambuddy's Spoolman URL: the bridge's loopback pass-through (spoolman_proxy).
 SPOOLMAN_PROXY_HOST = "127.0.0.1"
 SPOOLMAN_PROXY_PORT = 7913
+CONF_GATEWAY_PORT = "gateway_port"
 BAMBUDDY_SYNC_INTERVAL = timedelta(seconds=30)
+# Bambuddy looks for a print's 3MF once at print start, before the X2D has
+# copied it to the USB stick; nudge it again after these delays (seconds).
+BAMBUDDY_NUDGE_DELAYS_S = (60, 120)
 BAMBULAB_DOMAIN = "bambu_lab"
 
 EXTRA_RFID = "bambu_rfid"

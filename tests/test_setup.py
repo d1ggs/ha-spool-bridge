@@ -30,3 +30,8 @@ async def test_bambuddy_key_starts_gateway_on_loopback(hass):
     assert kwargs["bambuddy"] is not None
     assert kwargs["proxy"].url == "http://127.0.0.1:7913"
     assert {key for _, key, _ in fields[0]} == {"tag", "bambu_slicer_filament"}
+
+
+async def test_gateway_port_option(hass):
+    kwargs, _ = await setup(hass, {"bambuddy_api_key": "k", "gateway_port": 7920})
+    assert kwargs["proxy"].url == "http://127.0.0.1:7920"

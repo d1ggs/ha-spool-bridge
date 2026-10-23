@@ -17,7 +17,7 @@ from homeassistant.helpers.storage import Store
 from .assignment import Ambiguous, Assign, Expired, LoadWindow
 from .bambuddy import BambuddyClient, BambuddyError
 from .const import (
-    ACTION_PREFIX, BAMBUDDY_SYNC_INTERVAL, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES,
+    ACTION_PREFIX, BAMBUDDY_NUDGE_DELAYS_S, BAMBUDDY_SYNC_INTERVAL, BUSY_STATES, CONF_NAME_RULES, CONF_NOTIFY_SERVICE, DOMAIN, END_STATES,
     EXTRA_RFID, EXTRA_SLICER_FILAMENT, EXTRA_SLOT, EXTRA_TAG,
     IDLE_STATES, JOB_FETCH_ATTEMPTS, JOB_FETCH_DELAY_S, LEDGER_RETRY_INTERVAL, LOAD_WINDOW_S,
     RECONCILE_DEBOUNCE_S, RECONCILE_INTERVAL, RUNOUT_PAUSE_GRACE_S, SET_FILAMENT_ATTEMPTS, SET_FILAMENT_RETRY_DELAY_S,
@@ -469,6 +469,8 @@ class Bridge:
                 self._error(f"Bambuddy sync: {err}")
                 return
             by_id = {s["id"]: s for s in spools}
+            if spools:  # an empty answer is more likely a glitch than an empty inventory
+                remote = await self._drop_stale_rows(remote, by_id)
             local: dict[SlotRef, int] = {}
             for spool in spools:
                 slot = SlotRef.parse(extra_get(spool, EXTRA_SLOT))
@@ -496,6 +498,41 @@ class Bridge:
             for slot, spool_id in local.items():
                 if remote.get(slot) != spool_id and in_use is not None and slot not in in_use:
                     await self._bb_push(by_id[spool_id], slot)
+
+    async def _drop_stale_rows(self, remote: dict[SlotRef, int], by_id: dict[int, dict]) -> dict[SlotRef, int]:
+        """Delete Bambuddy rows for spools that are gone (Spoolman reuses ids, so
+        an old row can name a different spool) or that sit on an RFID tray holding
+        another spool (caller holds _bb_lock)."""
+        kept: dict[SlotRef, int] = {}
+        for slot, spool_id in remote.items():
+            spool = by_id.get(spool_id)
+            tray = self.printer.tray_for(slot)
+            state = self.printer.tray_state(tray) if tray is not None else None
+            on_other_rfid = bool(state and not state.empty and state.rfid
+                                 and (extra_get(spool, EXTRA_RFID) or "").upper() != state.rfid) if spool else False
+            if spool is not None and not on_other_rfid:
+                kept[slot] = spool_id
+                continue
+            try:
+                await self.bambuddy.unassign(spool_id)
+            except BambuddyError as err:
+                self._error(f"Bambuddy cleanup: {err}")
+                kept[slot] = spool_id
+                continue
+            _LOGGER.info("Removed Bambuddy's stale assignment of spool %s at %s", spool_id, slot.key)
+        return kept
+
+    async def _nudge_bambuddy(self) -> None:
+        """Bambuddy looks for the print file once, before the X2D has copied it to
+        the USB stick; asking again later fills in the print's archive."""
+        if not await self._bambuddy_ready():
+            return
+        for delay in BAMBUDDY_NUDGE_DELAYS_S:
+            await asyncio.sleep(delay)
+            try:
+                await self.bambuddy.nudge_print_file(self.bambuddy_printer)
+            except BambuddyError as err:
+                _LOGGER.debug("Bambuddy print-file nudge failed: %s", err)
 
     @callback
     def on_bambuddy_usage(self, spool_id: int, grams: float) -> None:
@@ -583,6 +620,9 @@ class Bridge:
             # event follows: take it now; a different print's split replaces it.
             if weights := self.printer.print_weights():
                 self.ledger.snapshot["weights"] = {str(flat): grams for flat, grams in weights.items()}
+            if self.bambuddy is not None:
+                self.entry.async_create_background_task(
+                    self.hass, self._nudge_bambuddy(), f"{DOMAIN} Bambuddy print-file nudge")
             self.ledger.progress = None
             await self._save()
         elif new == "pause" and (runouts := (self.ledger.snapshot or {}).get("runouts")):
@@ -594,7 +634,8 @@ class Bridge:
         elif (new in END_STATES and self.ledger.snapshot is not None
               and not self.ledger.snapshot.get("booked") and not self._fetching):
             self._fetching = True
-            self.entry.async_create_task(self.hass, self._fetch_job_loop(), f"{DOMAIN} job fetch")
+            # Background: waiting up to 10 minutes must not hold up HA's startup.
+            self.entry.async_create_background_task(self.hass, self._fetch_job_loop(), f"{DOMAIN} job fetch")
 
     async def _current_assignment(self) -> dict[str, int]:
         try:

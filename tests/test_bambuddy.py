@@ -50,3 +50,9 @@ async def test_assign_and_unassign(hass, aioclient_mock):
     await c.unassign(13)  # already gone: not an error
     body = aioclient_mock.mock_calls[0][2]
     assert body == {"spoolman_spool_id": 12, "printer_id": 1, "ams_id": 1, "tray_id": 3}
+
+
+async def test_nudge_print_file_ignores_the_image(hass, aioclient_mock):
+    aioclient_mock.get(f"{BASE}/api/v1/printers/1/cover", content=b"\x89PNG\r\n\x1a\n...")
+    await client(hass).nudge_print_file(1)
+    assert len(aioclient_mock.mock_calls) == 1
