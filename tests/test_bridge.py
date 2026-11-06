@@ -6,6 +6,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.spool_bridge.bridge import Bridge
 from custom_components.spool_bridge.model import SlotRef
 from custom_components.spool_bridge.printer import Printer
+from custom_components.spool_bridge.spoolman import SpoolmanError
 from tests.test_printer import SERIAL, setup_printer
 
 
@@ -400,6 +401,211 @@ async def test_third_party_load_through_reading_state_assigns(hass, bridge, free
     freezer.tick(11)
     await bridge.async_tick()
     bridge.spoolman.set_spool_extra.assert_any_await(42, {"bambu_slot": "ams:0:2"}, location="X2D AMS 1 · slot 3")
+
+
+async def test_tagless_load_that_stays_on_reading_state_assigns(hass, bridge, freezer):
+    # Seen live 2026-11-06: a tagless spool in a tray with no stored profile stays
+    # "?" until someone sets a profile, so waiting for it to settle waits forever.
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    ent = tray_entity(bridge, "ams:0:0")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    freezer.tick(11)
+    await bridge.async_tick()
+    bridge.spoolman.set_spool_extra.assert_any_await(42, {"bambu_slot": "ams:0:0"}, location="X2D AMS 1 · slot 1")
+    assert [c["entity_id"] for c in bridge.filament_calls] == [ent]
+
+
+async def test_reading_state_that_goes_empty_again_is_not_a_load(hass, bridge, freezer):
+    # Seen live 2026-11-06: feeding a spool can flicker Empty -> "?" -> Empty.
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    freezer.tick(11)
+    await bridge.async_tick()
+    assert not any(c.args[0] == 42 for c in bridge.spoolman.set_spool_extra.await_args_list)
+    assert bridge.window.armed == 42
+
+
+async def test_profile_set_on_a_reading_tray_is_not_a_load_for_the_next_scan(hass, bridge, freezer):
+    await bridge.async_start()
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    await bridge.on_tag("spool/show/42")
+    await tray(hass, ent, "Generic PLA", False, uuid="0" * 32)
+    freezer.tick(11)
+    await bridge.async_tick()
+    assert not any(c.args[0] == 42 for c in bridge.spoolman.set_spool_extra.await_args_list)
+    assert bridge.window.armed == 42
+
+
+async def test_second_scan_asks_for_the_slot_of_the_first(hass, bridge):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    await bridge.on_tag("spool/show/7")
+    assert bridge.window.armed == 7
+    prompts = [n for n in bridge.notes if n.get("data", {}).get("actions")]
+    assert len(prompts) == 1
+    assert "PolyTerra PLA (spool 42)" in prompts[0]["message"]
+    assert all("|42|" in a["action"] for a in prompts[0]["data"]["actions"])
+
+
+async def test_second_scan_assigns_a_first_spool_already_loaded(hass, bridge):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    await bridge.on_tag("spool/show/7")
+    bridge.spoolman.set_spool_extra.assert_any_await(42, {"bambu_slot": "ams:0:2"}, location="X2D AMS 1 · slot 3")
+    assert bridge.window.armed == 7
+
+
+async def test_slot_picked_before_loading_stays_with_the_picked_spool(hass, bridge, freezer):
+    await bridge.async_start()
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await bridge.on_tag("spool/show/42")
+    await bridge.on_tag("spool/show/7")
+    hass.bus.async_fire("mobile_app_notification_action", {"action": "SPOOLBRIDGE|42|ams:0:2"})
+    await hass.async_block_till_done()
+    bridge.spoolman.set_spool_extra.assert_any_await(42, {"bambu_slot": "ams:0:2"}, location="X2D AMS 1 · slot 3")
+    await tray(hass, ent, "?", False, kind="?")
+    freezer.tick(11)
+    await bridge.async_tick()
+    assert not any(c.args[0] == 7 for c in bridge.spoolman.set_spool_extra.await_args_list)
+    assert bridge.window.armed == 7
+
+
+async def test_slot_picked_after_loading_stays_with_the_picked_spool(hass, bridge, freezer):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    await bridge.on_tag("spool/show/7")
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    hass.bus.async_fire("mobile_app_notification_action", {"action": "SPOOLBRIDGE|42|ams:0:2"})
+    await hass.async_block_till_done()
+    freezer.tick(11)
+    await bridge.async_tick()
+    bridge.spoolman.set_spool_extra.assert_any_await(42, {"bambu_slot": "ams:0:2"}, location="X2D AMS 1 · slot 3")
+    assert not any(c.args[0] == 7 for c in bridge.spoolman.set_spool_extra.await_args_list)
+    assert bridge.window.armed == 7
+
+
+async def test_old_prompt_tap_for_the_armed_spool_keeps_its_load(hass, bridge, freezer):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    hass.bus.async_fire("mobile_app_notification_action", {"action": "SPOOLBRIDGE|42|ams:0:2"})
+    await hass.async_block_till_done()
+    freezer.tick(11)
+    await bridge.async_tick()
+    assert bridge.window.armed is None
+
+
+async def test_rfid_sync_skips_a_tray_still_reading(hass, bridge):
+    await bridge.async_start()
+    bridge.spoolman.ensure_vendor = AsyncMock()
+    bridge.spoolman.ensure_filament = AsyncMock()
+    bridge.spoolman.create_spool = AsyncMock()
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    hass.states.async_set(ent, "?", {"empty": False, "tray_uuid": RFID, "type": "?"})
+    await hass.async_block_till_done()
+    await bridge.sync_rfid_trays()
+    bridge.spoolman.ensure_filament.assert_not_awaited()
+
+
+@pytest.mark.parametrize("state,empty,uuid,kind", [
+    ("Empty", True, "", "Empty"),
+    ("Bambu PLA Basic", False, RFID, "PLA"),
+])
+async def test_tray_back_from_unavailable_withdraws_the_load(hass, bridge, freezer, state, empty, uuid, kind):
+    await bridge.async_start()
+    bridge.sync_rfid_trays = AsyncMock()
+    await bridge.on_tag("spool/show/42")
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, kind="?")
+    hass.states.async_set(ent, "unavailable", {})
+    await hass.async_block_till_done()
+    await tray(hass, ent, state, empty, uuid=uuid, kind=kind)
+    freezer.tick(11)
+    await bridge.async_tick()
+    assert not any(c.args[0] == 42 for c in bridge.spoolman.set_spool_extra.await_args_list)
+    assert bridge.window.armed == 42
+
+
+async def test_reading_state_with_a_uuid_does_not_sync(hass, bridge):
+    await bridge.async_start()
+    bridge.sync_rfid_trays = AsyncMock()
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, "Empty", True, kind="Empty")
+    await tray(hass, ent, "?", False, uuid=RFID, kind="?")
+    bridge.sync_rfid_trays.assert_not_awaited()
+
+
+@pytest.mark.parametrize("state,empty,uuid,kind,synced", [
+    ("Empty", True, "", "Empty", True),
+    ("?", False, "", "?", True),
+    ("Bambu PLA Matte", False, "FEDCBA9876543210FEDCBA9876543210", "PLA", True),
+    ("Bambu PLA Matte", False, RFID, "PLA", False),
+])
+async def test_rfid_tray_syncs_only_on_a_new_tag(hass, bridge, state, empty, uuid, kind, synced):
+    await bridge.async_start()
+    bridge.sync_rfid_trays = AsyncMock()
+    ent = tray_entity(bridge, "ams:0:2")
+    await tray(hass, ent, state, empty, uuid=uuid, kind=kind)
+    bridge.sync_rfid_trays.reset_mock()
+    await tray(hass, ent, "Bambu PLA Basic", False, uuid=RFID)
+    assert bridge.sync_rfid_trays.await_count == int(synced)
+
+
+async def test_expired_window_prompt_names_the_spool(hass, bridge, freezer):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    freezer.tick(301)
+    await bridge.async_tick()
+    prompts = [n for n in bridge.notes if n.get("data", {}).get("actions")]
+    assert [p["message"] for p in prompts] == ["PolyTerra PLA (spool 42): No slot change seen. Pick the slot:"]
+
+
+async def test_two_loads_prompt_names_the_spool(hass, bridge, freezer):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    for key in ("ams:0:1", "ams:0:2"):
+        ent = tray_entity(bridge, key)
+        await tray(hass, ent, "Empty", True, kind="Empty")
+        await tray(hass, ent, "?", False, kind="?")
+    freezer.tick(11)
+    await bridge.async_tick()
+    prompts = [n for n in bridge.notes if n.get("data", {}).get("actions")]
+    assert [p["message"] for p in prompts] == ["PolyTerra PLA (spool 42): More than one slot changed. Which one?"]
+    assert [a["action"] for a in prompts[0]["data"]["actions"]] == ["SPOOLBRIDGE|42|ams:0:1", "SPOOLBRIDGE|42|ams:0:2"]
+
+
+async def test_prompt_still_goes_out_when_spoolman_is_down(hass, bridge):
+    await bridge.async_start()
+    bridge.spoolman.get_spool = AsyncMock(side_effect=SpoolmanError("down"))
+    await bridge._ask_slot(42, (SlotRef.parse("ams:0:1"),), "Pick the slot:")
+    await hass.async_block_till_done()
+    assert bridge.notes[-1]["message"] == "Spool (spool 42): Pick the slot:"
+
+
+async def test_rescanning_the_same_spool_does_not_ask(hass, bridge):
+    await bridge.async_start()
+    await bridge.on_tag("spool/show/42")
+    await bridge.on_tag("spool/show/42")
+    assert bridge.window.armed == 42
+    assert not any(n.get("data", {}).get("actions") for n in bridge.notes)
 
 
 async def test_rfid_tray_back_after_restart_syncs(hass, bridge):
