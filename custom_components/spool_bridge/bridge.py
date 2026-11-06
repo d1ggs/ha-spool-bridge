@@ -34,7 +34,9 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _reading(state: TrayState) -> bool:
-    """ha-bambulab shows a tray as "?" while the AMS reads a freshly loaded spool."""
+    """ha-bambulab shows "?" for a loaded spool with no profile: for about a second
+    while the AMS reads a tag, or indefinitely for a tagless spool in a tray with no
+    stored profile, until something sets one."""
     return not state.empty and state.material == "?"
 
 
@@ -139,7 +141,9 @@ class Bridge:
 
     async def async_tick(self) -> None:
         now = time.time()
-        decision = self.window.settle(now) or self.window.expire(now)
+        await self._apply_decision(self.window.settle(now) or self.window.expire(now))
+
+    async def _apply_decision(self, decision: Assign | Ambiguous | Expired | None) -> None:
         if isinstance(decision, Assign):
             await self.assign(decision.spool_id, decision.slot)
         elif isinstance(decision, Ambiguous):
@@ -162,13 +166,22 @@ class Bridge:
     async def _ask_slot(self, spool_id: int, slots: tuple[SlotRef, ...], message: str) -> None:
         name = self.printer.name()
         actions = [{"action": f"{ACTION_PREFIX}|{spool_id}|{s.key}", "title": s.label(name)} for s in slots]
-        await self.notify(message, actions)
+        fil = ((await self._spool(spool_id)) or {}).get("filament") or {}
+        label = f"{fil.get('name') or fil.get('material') or 'Spool'} (spool {spool_id})"
+        await self.notify(f"{label}: {message}", actions)
 
     @callback
     def _action_event(self, event: Event) -> None:
         parts = str(event.data.get("action") or "").split("|")
         if len(parts) == 3 and parts[0] == ACTION_PREFIX and parts[1].isdigit() and (slot := SlotRef.parse(parts[2])):
-            self.hass.async_create_task(self.assign(int(parts[1]), slot))
+            spool_id = int(parts[1])
+            tray = self.printer.tray_for(slot)
+            state = self.printer.tray_state(tray) if tray is not None else None
+            if state is not None and state.empty:
+                self.window.slot_claimed(slot, spool_id, time.time())
+            elif self.window.armed != spool_id:
+                self.window.tray_withdrawn(slot)
+            self.hass.async_create_task(self.assign(spool_id, slot))
 
     # ------------------------------------------------------------ scan -> load
 
@@ -184,10 +197,11 @@ class Bridge:
         if spool is None or spool.get("archived"):
             await self.notify(f"Unknown spool {spool_id}")
             return
-        self.window.scan(spool_id, time.time())
+        previous = self.window.scan(spool_id, time.time())
         fil = spool.get("filament") or {}
         await self.notify(f"{fil.get('name') or fil.get('material')}, {round(spool.get('remaining_weight') or 0)} g"
                           " — load it into any slot within 5 min.")
+        await self._apply_decision(previous)
 
     async def _spool(self, spool_id: int) -> dict | None:
         try:
@@ -211,27 +225,28 @@ class Bridge:
         if old is None:
             # Back from unavailable (HA or ha-bambulab restart): the startup sync ran
             # before the trays were known, so an RFID spool may still lack its slot.
+            if new.empty or new.rfid:
+                self.window.tray_withdrawn(tray.slot)
             if new.rfid and not new.empty:
                 await self.sync_rfid_trays()
             return
         if new.active and not old.active:
             await self._confirm_backup(tray.slot)
         if new.empty:
+            self.window.tray_withdrawn(tray.slot)
             if not old.empty:
                 await self._record_runout(tray.slot)
                 await self.unassign(tray.slot)
             return
-        # "?" (not empty, no tag yet) while the AMS reads the spool: decide once it settles.
-        if _reading(new):
-            return
-        if not old.empty and not _reading(old):
-            if new.rfid and new.rfid != old.rfid:  # a different RFID spool without an empty in between
+        if new.rfid and not _reading(new):
+            self.window.tray_withdrawn(tray.slot)
+            if old.empty or _reading(old) or new.rfid != old.rfid:
                 await self.sync_rfid_trays()
             return
-        if new.rfid:
-            await self.sync_rfid_trays()
-            return
-        self.window.tray_loaded(tray.slot, time.time())
+        # A tray leaving Empty is the load, whether or not it has a profile yet: "?"
+        # may never clear. An RFID tag read during the settle period withdraws it.
+        if old.empty:
+            self.window.tray_loaded(tray.slot, time.time())
 
     # ------------------------------------------------------------ auto-refill
 
@@ -352,7 +367,7 @@ class Bridge:
                 await self._sync_rfid_tags(spools)
             for tray in self.printer.trays():
                 state = self.printer.tray_state(tray)
-                if tray.slot.kind != "ams" or state is None or state.empty or not state.rfid:
+                if tray.slot.kind != "ams" or state is None or state.empty or not state.rfid or _reading(state):
                     continue
                 spool = next((s for s in spools if (extra_get(s, EXTRA_RFID) or "").upper() == state.rfid), None)
                 if spool is None:
