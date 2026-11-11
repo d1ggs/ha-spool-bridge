@@ -69,6 +69,14 @@ def test_spool_preset_from_bambuddy_wins_when_it_is_a_printer_profile():
     assert spool_filament_id(with_preset("GFA01")) == "GFA01"
     assert spool_filament_id(with_preset("GFSA01_07")) == "GFA01"
     assert spool_filament_id(with_preset("PMPL07")) == "PMPL07"
+    # Filament ids can start with "GFS" too: SUNLU and Bambu's support filaments.
+    assert spool_filament_id(with_preset("GFSNL05")) == "GFSNL05"
+    assert spool_filament_id(with_preset("GFSNLS05_01")) == "GFSNL05"
+    assert spool_filament_id(with_preset("GFS05")) == "GFS05"
+    # Setting ids whose filament id breaks the naming rule, as a family and one by one.
+    assert spool_filament_id(with_preset("GFSA04_02")) == "GFA00"
+    assert spool_filament_id(with_preset("GFSA05_07")) == "GFA05"
+    assert spool_filament_id(with_preset("GFSA05_10")) == "GFA01"
     for unusable in ("PFUS990b6e19965353", "PFCN12ab", "38", "0f8e2c1a-1b2c-4d5e-8f90-123456789abc"):
         assert spool_filament_id(with_preset(unusable)) == "GFL03"
 

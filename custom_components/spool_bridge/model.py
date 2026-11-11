@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+from .setting_ids import SETTING_ID_EXACT, SETTING_ID_FAMILIES
+
 MATERIAL_DEFAULT_IDS = {
     "PLA": "GFL99", "PETG": "GFG99", "ABS": "GFB99",
     "ASA": "GFB98", "TPU": "GFU99", "PLA-CF": "GFL98",
@@ -136,6 +138,20 @@ def default_filament_id(material: str | None) -> str:
 
 
 _PROFILE_ID_RE = re.compile(r"^[A-Z][A-Z0-9]{3,7}$")
+_BAMBU_SETTING_RE = re.compile(r"^GFS([A-Z]\d+)$")
+_SUNLU_SETTING_RE = re.compile(r"^GFSNLS(\d+)$")
+
+
+def _setting_rule(base: str) -> str:
+    """Bambu's usual setting id -> filament id naming ("GFSA01" -> "GFA01").
+
+    Filament ids may start with "GFS" too: support filaments ("GFS05") and
+    SUNLU ("GFSNL05", setting id "GFSNLS05"), so those pass through."""
+    if match := _SUNLU_SETTING_RE.match(base):
+        return f"GFSNL{match.group(1)}"
+    if match := _BAMBU_SETTING_RE.match(base):
+        return f"GF{match.group(1)}"
+    return base
 
 
 def preset_filament_id(value: str | None) -> str | None:
@@ -144,12 +160,11 @@ def preset_filament_id(value: str | None) -> str | None:
     Bambuddy stores filament ids ("GFA01"), setting ids ("GFSA01_07") and
     presets the printer cannot take as a tray profile: cloud user presets
     (PFUS…/PFCN…), local preset numbers and Orca UUIDs."""
-    base = (value or "").strip().split("_")[0].upper()
+    full = (value or "").strip().upper()
+    base = full.split("_")[0]
     if base.startswith(("PFUS", "PFCN")) or not _PROFILE_ID_RE.match(base):
         return None
-    if base.startswith("GFS") and len(base) >= 5:
-        return "GF" + base[3:]
-    return base
+    return SETTING_ID_EXACT.get(full) or SETTING_ID_FAMILIES.get(base) or _setting_rule(base)
 
 
 def spool_filament_id(spool: dict) -> str:
