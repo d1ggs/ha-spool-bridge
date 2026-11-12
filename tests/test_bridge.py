@@ -524,6 +524,22 @@ async def test_rfid_sync_skips_a_tray_still_reading(hass, bridge):
     bridge.spoolman.ensure_filament.assert_not_awaited()
 
 
+async def test_rfid_support_spool_imports_as_pla_s(hass, bridge):
+    await bridge.async_start()
+    bridge.spoolman.get_spools = AsyncMock(return_value=[])
+    bridge.spoolman.ensure_vendor = AsyncMock(return_value=1)
+    bridge.spoolman.ensure_filament = AsyncMock(return_value=7)
+    bridge.spoolman.create_spool = AsyncMock(return_value={"id": 99, "extra": {}})
+    bridge.assign = AsyncMock()
+    ent = tray_entity(bridge, "ams:0:2")
+    hass.states.async_set(ent, "Bambu Support For PLA/PETG", {
+        "empty": False, "tray_uuid": RFID, "type": "Sup.PLA", "filament_id": "GFS05",
+        "name": "Bambu Support For PLA/PETG", "color": "#FFFFFFFF", "tray_weight": "500", "remain": 100})
+    await hass.async_block_till_done()
+    await bridge.sync_rfid_trays()
+    assert bridge.spoolman.ensure_filament.await_args.kwargs["material"] == "PLA-S"
+
+
 @pytest.mark.parametrize("state,empty,uuid,kind", [
     ("Empty", True, "", "Empty"),
     ("Bambu PLA Basic", False, RFID, "PLA"),

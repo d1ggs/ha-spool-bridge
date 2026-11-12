@@ -104,6 +104,13 @@ class TrayState:
     active: bool = False  # the tray currently feeding the nozzle
 
 
+def _material(tray_type: Any) -> str:
+    """ha-bambulab 2.3.0+ names support filaments as Bambu Studio shows them
+    ("Sup.PLA"); the printer reports, and Spoolman stores, "PLA-S"."""
+    value = str(tray_type or "")
+    return f"{value[4:]}-S" if value.startswith("Sup.") and len(value) > 4 else value
+
+
 def _int(value: Any, default: int) -> int:
     try:
         return int(float(value))
@@ -122,7 +129,7 @@ def parse_tray_state(state: Any) -> TrayState | None:
         empty=bool(attrs.get("empty")),
         rfid=rfid,
         filament_id=str(attrs.get("filament_id") or ""),
-        material=str(attrs.get("type") or ""),
+        material=_material(attrs.get("type")),
         color=str(attrs.get("color") or ""),
         name=str(attrs.get("name") or ""),
         tray_weight=_int(attrs.get("tray_weight"), 0),

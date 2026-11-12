@@ -104,6 +104,18 @@ def test_parse_tray_state():
     assert s.rfid == "ABCDEF0123" + "1" * 22 and s.remain == 80 and s.tray_weight == 1000 and not s.empty
 
 
+def test_parse_tray_state_support_type():
+    """ha-bambulab 2.3.0+ shows support filaments as Bambu Studio does ("Sup.PLA");
+    Spoolman and the printer's own tray_type call them "PLA-S"."""
+    class S:
+        def __init__(self, attrs):
+            self.state, self.attributes = "x", attrs
+
+    for shown, material in (("Sup.PLA", "PLA-S"), ("Sup.PA", "PA-S"), ("Sup.ABS", "ABS-S"),
+                            ("PLA-S", "PLA-S"), ("PLA", "PLA"), ("?", "?")):
+        assert parse_tray_state(S({"empty": False, "type": shown})).material == material
+
+
 async def test_set_filament_calls_bambulab(hass):
     setup_printer(hass)
     calls: list[ServiceCall] = []
