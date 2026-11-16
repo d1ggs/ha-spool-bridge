@@ -42,6 +42,9 @@ def setup_printer(hass: HomeAssistant) -> None:
     hass.states.async_set(enc.entity_id, "on")
     hass.states.async_set(dev.entity_id, "on")
     hass.states.async_set(pw.entity_id, "0", {})
+    pt = ents.async_get_or_create("sensor", "bambu_lab", f"{SERIAL}_print_type", device_id=printer.id,
+                                  suggested_object_id="print_type")
+    hass.states.async_set(pt.entity_id, "local")
 
 
 async def test_trays_and_status(hass):

@@ -158,6 +158,13 @@ class Printer:
     def weight_entity(self) -> str | None:
         return self._entity(f"{self.serial}_print_weight")
 
+    def is_system_print(self) -> bool:
+        """True while the printer runs its own G-code (calibrations from
+        /usr/etc/print): no sliced file, so no per-tray grams to book."""
+        entity = self._entity(f"{self.serial}_print_type")
+        state = self.hass.states.get(entity) if entity else None
+        return state is not None and state.state == "system"
+
     def name(self) -> str:
         devices = dr.async_get(self.hass).async_get_devices(identifiers={(BAMBULAB_DOMAIN, self.serial)})
         device = devices[0] if devices else None
