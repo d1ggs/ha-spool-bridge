@@ -61,7 +61,7 @@ class Bridge:
         self._reconcile_lock = asyncio.Lock()
         self._ledger_lock = asyncio.Lock()
         self._stuck_notified = False
-        self._fetching = False
+        self._fetching_for: dict | None = None  # snapshot whose grams a wait is fetching
         self.state: dict[str, Any] = {"pending_jobs": 0, "last_error": None}
 
     # ------------------------------------------------------------ lifecycle
@@ -629,6 +629,9 @@ class Bridge:
 
     async def on_status_change(self, old: str | None, new: str) -> None:
         if new in BUSY_STATES and old in IDLE_STATES:
+            # Retire the previous record before awaiting, so a wait still running for it
+            # stops now and does not take this print's grams for its own.
+            self.ledger.snapshot = None
             assignment = await self._current_assignment()
             self.ledger.snapshot = {"start_ts": time.time(), "assignment": assignment, "runouts": {}, "booked": False}
             # Reprinting the same plate leaves the split unchanged, so no change
@@ -646,11 +649,28 @@ class Bridge:
                 for key in recent:
                     del runouts[key]
                 await self._save()
-        elif (new in END_STATES and self.ledger.snapshot is not None
-              and not self.ledger.snapshot.get("booked") and not self._fetching):
-            self._fetching = True
+        elif new in END_STATES and self.printer.is_system_print():
+            await self._drop_calibration()
+        elif (new in END_STATES and (snapshot := self.ledger.snapshot) is not None
+              and not snapshot.get("booked") and self._fetching_for is not snapshot):
+            self._fetching_for = snapshot
+            # Book by how the print ended, not by what the printer does by the time the grams show up.
+            snapshot["end_status"] = new
+            await self._save()
             # Background: waiting up to 10 minutes must not hold up HA's startup.
-            self.entry.async_create_background_task(self.hass, self._fetch_job_loop(), f"{DOMAIN} job fetch")
+            self.entry.async_create_background_task(
+                self.hass, self._fetch_job_loop(snapshot), f"{DOMAIN} job fetch")
+
+    async def _drop_calibration(self) -> None:
+        """A calibration has no sliced file, so its grams never come: drop its record.
+        Checked at the end, as at the start the printer can report the status before
+        the print type. A record that already ended, or has grams, belongs to an earlier,
+        real print."""
+        snapshot = self.ledger.snapshot
+        if (snapshot is not None and not snapshot.get("booked") and "end_status" not in snapshot
+                and not snapshot.get("weights")):
+            self.ledger.snapshot = None
+            await self._save()
 
     async def _current_assignment(self) -> dict[str, int]:
         try:
@@ -659,16 +679,21 @@ class Bridge:
             return {}
         return {slot: s["id"] for s in spools if (slot := extra_get(s, EXTRA_SLOT))}
 
-    async def _fetch_job_loop(self) -> None:
+    async def _fetch_job_loop(self, snapshot: dict) -> None:
+        """Wait for the grams of the print that just ended (`snapshot`). Stops when
+        another print starts: its record and grams belong to that print."""
         try:
             for _ in range(JOB_FETCH_ATTEMPTS):
+                if self.ledger.snapshot is not snapshot:
+                    break
                 if await self.process_finished_job():
                     return
                 await asyncio.sleep(JOB_FETCH_DELAY_S)
             await self.notify("A print finished but the printer did not report its filament usage; "
                               "it could not be booked.")
         finally:
-            self._fetching = False
+            if self._fetching_for is snapshot:
+                self._fetching_for = None
 
     def _local_job(self, snapshot: dict) -> dict | None:
         """Synthesize the job shape the ledger consumes from ha-bambulab's local
@@ -677,7 +702,7 @@ class Bridge:
             int(flat): grams for flat, grams in (snapshot.get("weights") or {}).items()}
         if not weights:
             return None
-        finished = self.printer.status() == "finish"
+        finished = (snapshot.get("end_status") or self.printer.status()) == "finish"
         return {"id": int(snapshot["start_ts"]),
                 "status": TASK_FINISHED if finished else TASK_FAILED,
                 "amsDetailMapping": [{"ams": flat, "weight": g} for flat, g in weights.items()]}
@@ -723,6 +748,8 @@ class Bridge:
         There is no job history to fall back on, so a print whose weights the
         printer has already overwritten (another print started since) cannot be
         recovered; apply_pending still retries any entries booked but not yet written."""
+        if self.printer.status() in END_STATES and self.printer.is_system_print():
+            await self._drop_calibration()
         snapshot = self.ledger.snapshot
         if (snapshot is not None and not snapshot.get("booked")
                 and self.printer.status() in END_STATES and self._local_job(snapshot) is not None):

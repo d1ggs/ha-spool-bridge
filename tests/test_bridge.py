@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -174,7 +175,7 @@ async def test_catch_up_books_open_snapshot_from_local_weights(hass, bridge):
     bridge.ledger.progress = 50
     bridge.spools[7]["extra"] = {}  # spool 7 unloaded since the snapshot
     set_local_weights(hass, bridge, {"AMS 2 Tray 2": 20.0})
-    bridge._fetching = True  # suppress the live end-transition loop; exercise catch_up directly
+    bridge._fetching_for = bridge.ledger.snapshot  # suppress the live end-transition loop; exercise catch_up directly
     hass.states.async_set(bridge.printer.status_entity, "failed")
     await hass.async_block_till_done()
     await bridge.catch_up_jobs()
@@ -681,3 +682,182 @@ async def test_job_fetch_loop_does_not_hold_up_startup(hass, bridge):
         await bridge.on_status_change("running", "finish")
     assert background.called and not tracked.called
     background.call_args.args[1].close()  # the coroutine, never scheduled here
+
+
+async def test_calibration_needs_no_wait_and_next_print_is_booked(hass, bridge):
+    # Seen live 2026-11-16: the printer ran its own calibration (print type
+    # "system", no sliced file, so no per-tray grams) and the bridge waited for
+    # grams that never come. A calibration now ends without a wait or a message.
+    await bridge.async_start()
+    status, kind = bridge.printer.status_entity, "sensor.print_type"
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    # The printer can report the new status a moment before the new print type.
+    hass.states.async_set("sensor.print_weight", "0", {})
+    hass.states.async_set(status, "running")
+    await hass.async_block_till_done()
+    hass.states.async_set(kind, "system")
+    await hass.async_block_till_done()
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    hass.states.async_set(status, "prepare")
+    await hass.async_block_till_done()
+    hass.states.async_set(kind, "local")
+    hass.states.async_set(status, "running")
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 0.5})
+    await hass.async_block_till_done()
+    await hass.async_block_till_done()
+    assert not bridge.ledger.snapshot.get("booked")
+    assert not any("booked" in n["message"] for n in bridge.notes)  # a calibration uses no spool
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    await hass.async_block_till_done()
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 0.5)
+
+
+async def test_job_wait_stops_when_next_print_starts(hass, bridge):
+    # A print ends without reporting grams; the next print starts while the
+    # bridge still waits. The wait must not book the new print.
+    await bridge.async_start()
+    status = bridge.printer.status_entity
+    await _start_print(hass, bridge, status)
+    hass.states.async_set("sensor.print_weight", "0", {})
+    old = bridge.ledger.snapshot
+    with patch.object(bridge.entry, "async_create_background_task") as background:
+        hass.states.async_set(status, "finish")
+        await hass.async_block_till_done()
+    loop = background.call_args.args[1]
+    hass.states.async_set(status, "prepare")
+    await hass.async_block_till_done()
+    hass.states.async_set(status, "running")
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 3.0})
+    await hass.async_block_till_done()
+    assert bridge.ledger.snapshot is not old
+    await loop  # the leftover wait for the old print
+    assert not bridge.ledger.snapshot.get("booked")
+    bridge.spoolman.use_weight.assert_not_awaited()
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    await hass.async_block_till_done()
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 3.0)
+
+
+
+async def test_ended_print_books_by_how_it_ended(hass, bridge):
+    # The grams can arrive after the printer has moved on from "finish".
+    await bridge.async_start()
+    status = bridge.printer.status_entity
+    await _start_print(hass, bridge, status)
+    hass.states.async_set("sensor.print_weight", "0", {})
+    with patch.object(bridge.entry, "async_create_background_task") as background:
+        hass.states.async_set(status, "finish")
+        await hass.async_block_till_done()
+    loop = background.call_args.args[1]
+    hass.states.async_set(status, "idle")
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 12.0})
+    await hass.async_block_till_done()
+    await loop
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 12.0)
+
+
+async def test_job_wait_ignores_next_print_while_it_is_starting(hass, bridge):
+    # The next print's grams can show up while its start is still reading Spoolman.
+    await bridge.async_start()
+    status = bridge.printer.status_entity
+    await _start_print(hass, bridge, status)
+    hass.states.async_set("sensor.print_weight", "0", {})
+    with patch.object(bridge.entry, "async_create_background_task") as background:
+        hass.states.async_set(status, "finish")
+        await hass.async_block_till_done()
+    loop = background.call_args.args[1]
+    gate = asyncio.Event()
+
+    async def slow_spools(allow_archived=True):
+        await gate.wait()
+        return list(bridge.spools.values())
+
+    bridge.spoolman.get_spools = AsyncMock(side_effect=slow_spools)
+    hass.states.async_set(status, "prepare")
+    for _ in range(3):
+        await asyncio.sleep(0)
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 3.0})
+    await loop
+    bridge.spoolman.use_weight.assert_not_awaited()
+    gate.set()
+    await hass.async_block_till_done()
+    hass.states.async_set(status, "running")
+    await hass.async_block_till_done()
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    await hass.async_block_till_done()
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 3.0)
+
+
+async def test_short_print_during_old_wait_is_booked(hass, bridge):
+    # Print A ends without grams; print B starts and ends while A's wait sleeps.
+    await bridge.async_start()
+    status = bridge.printer.status_entity
+    await _start_print(hass, bridge, status)
+    hass.states.async_set("sensor.print_weight", "0", {})
+    with patch.object(bridge.entry, "async_create_background_task") as background:
+        hass.states.async_set(status, "finish")
+        await hass.async_block_till_done()
+        hass.states.async_set(status, "running")
+        set_local_weights(hass, bridge, {"AMS 2 Tray 2": 3.0})
+        await hass.async_block_till_done()
+        hass.states.async_set(status, "finish")
+        await hass.async_block_till_done()
+    loops = [c.args[1] for c in background.call_args_list if c.args[2].endswith("job fetch")]
+    assert len(loops) == 2
+    second = bridge.ledger.snapshot
+    await loops[0]
+    assert bridge._fetching_for is second  # the old wait leaves the new one's claim alone
+    await loops[1]
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 3.0)
+
+
+async def test_calibration_end_keeps_earlier_ended_print(hass, bridge):
+    # A real print ended (no grams yet) and the calibration's start was missed.
+    await bridge.async_start()
+    status = bridge.printer.status_entity
+    await _start_print(hass, bridge, status)
+    hass.states.async_set("sensor.print_weight", "0", {})
+    with patch.object(bridge.entry, "async_create_background_task") as background:
+        hass.states.async_set(status, "finish")
+        await hass.async_block_till_done()
+    loop = background.call_args.args[1]
+    hass.states.async_set("sensor.print_type", "system")
+    hass.states.async_set(status, "unavailable")
+    await hass.async_block_till_done()
+    hass.states.async_set(status, "finish")
+    await hass.async_block_till_done()
+    assert bridge.ledger.snapshot is not None
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 5.0})
+    await loop
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 5.0)
+
+
+async def test_catch_up_drops_calibration(hass, bridge):
+    # HA restarted during a calibration, so no end event reached the bridge.
+    bridge.ledger.snapshot = {"start_ts": 1.0, "assignment": {"ams:1:1": 7}, "runouts": {}, "booked": False}
+    hass.states.async_set("sensor.print_type", "system")
+    hass.states.async_set(bridge.printer.status_entity, "finish")
+    set_local_weights(hass, bridge, {"AMS 2 Tray 2": 5.0})  # grams of an earlier print
+    await bridge.async_start()
+    await bridge.catch_up_jobs()
+    await hass.async_block_till_done()
+    assert bridge.ledger.snapshot is None
+    bridge.spoolman.use_weight.assert_not_awaited()
+
+
+async def test_catch_up_keeps_print_that_ended_before_calibration(hass, bridge):
+    # HA was down while a print ended and a calibration ran after it.
+    bridge.ledger.snapshot = {"start_ts": 1.0, "assignment": {"ams:1:1": 7}, "runouts": {}, "booked": False,
+                              "weights": {"5": 20.0}}
+    bridge.ledger.progress = 100
+    hass.states.async_set("sensor.print_type", "system")
+    hass.states.async_set(bridge.printer.status_entity, "finish")
+    await bridge.async_start()
+    await bridge.catch_up_jobs()
+    await hass.async_block_till_done()
+    bridge.spoolman.use_weight.assert_awaited_once_with(7, 20.0)
